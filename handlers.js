@@ -16,6 +16,9 @@ const border = require('./border');
 const tear = require('./tear');
 const sudoku = require('./sudoku');
 const sevenday = require('./sevenday');
+const exam = require('./exam');
+const tupo = require('./tupo');
+const pet = require('./pet');
 
 const esc = (s) => String(s).replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
 const el = (name, v) => `<${name}>${esc(v)}</${name}>`;
@@ -199,7 +202,7 @@ module.exports = {
       caneat: 0, meritlevel: 0, meritscore: game.propCounts(db, acc.uid, pl.server_id)[9994] || 0, warpower: 0, LastActionUpdatePastTime: 0, LastSPUpdatePastTime: 0,
       score: 0, viplevel: vip.level(db, acc.uid, pl.server_id), soul: 0, totalm: 0 };
     return '<root code="0"><user>' + Object.entries(f).map(([k, v]) => el(k, v)).join('') + '</user>' + gs.cards +
-      gs.suitlist + '<defensesuitlist></defensesuitlist><chipbag></chipbag>' +
+      gs.suitlist + '<defensesuitlist></defensesuitlist>' + game.chipbagXml(db, acc.uid, pl.server_id) +
       gs.ninjalist + '<defenseninjalist></defenseninjalist>' +
       '<chapinfo currentchap="19" currentstage="1"/></root>';
   },
@@ -738,6 +741,36 @@ module.exports = {
   rl_r_frontiers_war_recv_award: (c) => borderCall(c, (db, pl, p) => border.recv(db, pl, Number(p.Cmd))),
   rl_r_frontiers_war_rank: (c) => borderCall(c, (db, pl, p) => ({ code: 0, xml: border.rankXml(db, pl, Number(p.Cmd)) })),
 
+  // Ninja Test (exam.js, Base > Ninja Test).
+  rl_x_exam: (c) => borderCall(c, (db, pl, p) => {
+    const cmd = Number(p.Cmd);
+    if (cmd === 2) return tearRes(exam.setTeam(db, pl, p.card_index_list));
+    if (cmd === 3) return tearRes(exam.exchange(db, pl, Number(p.reward_id)));
+    if (cmd === 4) return tearRes(exam.buy(db, pl));
+    if (cmd === 5) return tearRes(exam.fight(db, pl));
+    if (cmd === 6) return tearRes(exam.openBox(db, pl, Number(p.box_index)));
+    if (cmd === 7) return tearRes(exam.next(db, pl));
+    return { code: 0, xml: exam.infoXml(db, pl) };
+  }),
+
+  // Breakthrough (tupo.js, Base > Breakthrough): Cmd 1 info, Cmd 2 break through. BagIndex = card seq.
+  rl_x_breakthrough: (c) => borderCall(c, (db, pl, p) =>
+    tearRes(Number(p.Cmd) === 2 ? tupo.breakThrough(db, pl, Number(p.BagIndex)) : tupo.info(db, pl, Number(p.BagIndex)))),
+
+  // Pets (pet.js, Base > Pets).
+  rl_x_pet: (c) => borderCall(c, (db, pl, p) => {
+    const cmd = Number(p.Cmd), id = Number(p.PetID);
+    if (cmd === 2) return { code: 0, xml: pet.circleXml(db, pl) };
+    if (cmd === 4) return tearRes(pet.trainInfo(db, pl, id));
+    if (cmd === 5) return tearRes(pet.train(db, pl, id, Number(p.Type)));
+    if (cmd === 6) return tearRes(pet.levelInfo(db, pl, id));
+    if (cmd === 7) return tearRes(pet.levelUp(db, pl, id));
+    if (cmd === 8) return tearRes(pet.rankInfo(db, pl, id));
+    if (cmd === 9) return tearRes(pet.rankUp(db, pl, id));
+    if (cmd >= 10 && cmd <= 13) return tearRes(pet.place(db, pl, cmd, id, Number(p.DstPetID)));
+    return { code: 0, xml: pet.listXml(db, pl) };
+  }),
+
   // Ninja Treasure board (sudoku.js, activity 24). rl_w_sudoku: Cmd 1 reroll, 2 one search, 3 buy all.
   rl_r_sudoku: (c) => borderCall(c, (db, pl) => ({ code: 0, xml: sudoku.infoXml(db, pl) })),
   rl_w_sudoku: (c) => borderCall(c, (db, pl, p) => {
@@ -907,7 +940,8 @@ module.exports = {
       return '<root code="0"><shoplist>' + rows('packages', packs) + rows('recruit', recruits) + '</shoplist></root>';
     }
     const owned = shopOwned(p);
-    const goods = game.table('consumeinfo').rows.filter((r) => r[4] > 0 || r[5] > 0).map((r, k) => ({
+    // unpriced items the player owns (pet grain/nostrum...) are listed too: this list is where the client learns its bag counts
+    const goods = game.table('consumeinfo').rows.filter((r) => r[4] > 0 || r[5] > 0 || (owned[r[1]] || 0) > 0).map((r, k) => ({
       propid: r[0], prop_name: esc(r[2]), prop_icon: r[3], prop_yuanbao: r[4], prop_yinzi: r[5], prop_show: 1, prop_function: r[7],
       prop_function_value1: n(r[8]), prop_function_value2: n(r[9]), prop_function_value3: n(r[10]), prop_function_value4: n(r[11]), bagnum: owned[r[1]] || 0, prop_order: k + 1,
     }));

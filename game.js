@@ -39,7 +39,7 @@ function ensure(db) {
   try { db.exec('ALTER TABLE players ADD COLUMN vip INTEGER NOT NULL DEFAULT 0'); } catch {}
   try { db.exec('ALTER TABLE players ADD COLUMN vipexp INTEGER NOT NULL DEFAULT 0'); } catch {}
   try { db.exec('ALTER TABLE cards ADD COLUMN newlife INTEGER NOT NULL DEFAULT 0'); } catch (e) { /* already there */ }
-  for (const c of ['pot_att', 'pot_def', 'pot_ckr', 'pend_att', 'pend_def', 'pend_ckr']) { try { db.exec(`ALTER TABLE cards ADD COLUMN ${c} INTEGER NOT NULL DEFAULT 0`); } catch (e) { /* already there */ } }
+  for (const c of ['pot_att', 'pot_def', 'pot_ckr', 'pend_att', 'pend_def', 'pend_ckr', 'breaklvl']) { try { db.exec(`ALTER TABLE cards ADD COLUMN ${c} INTEGER NOT NULL DEFAULT 0`); } catch (e) { /* already there */ } }
   ready.add(db);
 }
 
@@ -175,12 +175,19 @@ function rollPack(r) {
   const pool = pools()[star] || pools()[4];
   return { ninja: pool[Math.floor(Math.random() * pool.length)] };
 }
+// Shinobi card fragments (piece_info ids) are kept as props CHIP_BASE + pieceId; the login sends them as <chipbag><chipitem/>.
+const CHIP_BASE = 30000;
+function chipCount(db, uid, sid, pieceId) { return propCounts(db, uid, sid)[CHIP_BASE + pieceId] || 0; }
+function chipbagXml(db, uid, sid) {
+  return '<chipbag>' + Object.entries(propCounts(db, uid, sid)).filter(([id, n]) => id > CHIP_BASE && id < CHIP_BASE + 10000 && n > 0)
+    .map(([id, n]) => `<chipitem id="${id - CHIP_BASE}" num="${n}"/>`).join('') + '</chipbag>';
+}
 function grantDrop(db, pl, dropId) {
   const r = table('dropinfo').rows.find((x) => x[0] === dropId);
   if (!r) return null;
   const n = r[13] || 1;
   const cards = [], props = [];
-  let coin = 0, cash = 0, soul = 0;
+  let coin = 0, cash = 0, soul = 0, chips = 0;
   const pack = r[12] === 1 && !(r[3] > 0) && !(r[7] > 0) ? rollPack(r) : null;
   const ninja = pack ? pack.ninja : r[3], equip = pack ? pack.equip : (r[3] > 0 ? 0 : r[4]);
   if (ninja > 0) for (let i = 0; i < n; i++) cards.push({ type: 1, id: ninja, seq: giveCard(db, pl.uid, pl.server_id, ninja) });
@@ -189,11 +196,15 @@ function grantDrop(db, pl, dropId) {
   else if (r[7] > 0) { propAdd(db, pl.uid, pl.server_id, r[7], n); props.push({ id: r[7], num: n }); }
   else if (r[10] > 0) cash = r[10] * n;
   else if (r[11] > 0) coin = r[11] * n;
-  else if (r[5] > 0 || r[6] > 0 || r[8] > 0) coin = 20000 * n; // ninjutsu / seal / fragment cards are not modelled yet
+  else if (r[8] > 0) { propAdd(db, pl.uid, pl.server_id, CHIP_BASE + r[8], n); chips = n; }
+  else if (r[9] > 0) { soul = r[9] * n; propAdd(db, pl.uid, pl.server_id, SOUL, soul); }
+  else if (r[5] > 0 || r[6] > 0) coin = 20000 * n; // ninjutsu / seal cards are not modelled yet
   if (coin || cash) db.prepare('UPDATE players SET coin=coin+?, gold=gold+? WHERE uid=? AND server_id=?').run(coin, cash, pl.uid, pl.server_id);
   const cardXml = cards.map((c) => '<card>' + el('id', c.id) + el('type', c.type) + el('num', 1) + el('attri', 0) + el('bagIndex', c.seq) + el('level', 1) + el('newlife', 0) + el('starlevel', 0) + '</card>').join('');
   const propXml = props.map((x) => '<prop>' + el('id', x.id) + el('num', x.num) + '</prop>').join('');
-  return `<award dropid="${dropId}" coin="${coin}"><cardlist>${cardXml}</cardlist><proplist>${propXml}</proplist><chipbag></chipbag>` +
+  // Lua award screens count one fragment per <chipitem>, so repeat it n times with num="1".
+  const chipXml = `<chipitem id="${r[8]}" num="1"/>`.repeat(chips);
+  return `<award dropid="${dropId}" coin="${coin}"><cardlist>${cardXml}</cardlist><proplist>${propXml}</proplist><chipbag>${chipXml}</chipbag>` +
     `${el('coin', coin)}${el('cash', cash)}<exp>0</exp><chip>0</chip><action>0</action><merit>0</merit><pk_action>0</pk_action>${el('soul', soul)}</award>`;
 }
 // One <award> holding several grantDrop results (Lua screens read only the first <award>).
@@ -202,7 +213,7 @@ function mergeAwards(list) {
   const sum = (tag) => list.reduce((s, a) => s + Number((a.match(new RegExp(`<${tag}>(\\d+)</${tag}>`)) || [0, 0])[1]), 0);
   const coin = sum('coin');
   return `<award dropid="${list.length ? (list[0].match(/dropid="(\d+)"/) || [0, 1])[1] : 1}" coin="${coin}"><cardlist>${pick(/<cardlist>(.*?)<\/cardlist>/)}</cardlist>` +
-    `<proplist>${pick(/<proplist>(.*?)<\/proplist>/)}</proplist><chipbag></chipbag>${el('coin', coin)}${el('cash', sum('cash'))}` +
+    `<proplist>${pick(/<proplist>(.*?)<\/proplist>/)}</proplist><chipbag>${pick(/<chipbag>(.*?)<\/chipbag>/)}</chipbag>${el('coin', coin)}${el('cash', sum('cash'))}` +
     '<exp>0</exp><chip>0</chip><action>0</action><merit>0</merit><pk_action>0</pk_action><soul>0</soul></award>';
 }
 // Cmd 1900 (one pull): <recruit .../> attributes + <award>. Cmd 1901 (ten pulls): <recruit_list> of exactly 10 <item><award>.
@@ -238,7 +249,8 @@ function battleXml(db, pl, chap, stage, opt = {}) {
   const nick = (opt.enemyName || 'Enemy').replace(/[<>&"]/g, '');
   return `<fight><preview type="0" result="${win}" defensenick="${nick}" defenseuid="${opt.enemyUid || 0}" defensecountry="1" defenselevel="${opt.enemyLevel || 1}" defenseviplevel="0"/>` +
     '<guard><ninjalist>' + foes.map(ninjaXml).join('') + '</ninjalist></guard>' +
-    '<killer><ninjalist>' + mine.map(ninjaXml).join('') + '</ninjalist></killer>' +
+    '<killer><ninjalist>' + mine.map(ninjaXml).join('') + '</ninjalist>' +
+    `<master_pet>${el('pet_id', require('./pet').masterPetId(db, pl.uid, pl.server_id))}</master_pet></killer>` +
     '<roundlist>' + roundXml + '</roundlist></fight>';
 }
 
@@ -537,7 +549,7 @@ const KEYS = ['al', 'ah', 'dl', 'dh', 'cl', 'ch'];
 function ninjaStats(card) {
   const n = ninjas().get(card.ninja_id);
   const o = {};
-  const mult = 1 + 0.05 * (card.starlevel || 0) + 0.1 * (card.newlife || 0); // sage growth +5% per level, reincarnation +10% per grade
+  const mult = 1 + 0.05 * (card.starlevel || 0) + 0.1 * (card.newlife || 0) + 0.04 * (card.breaklvl || 0); // sage growth +5% per level, reincarnation +10% per grade, breakthrough +4% per level
   KEYS.forEach((k, i) => { o[k] = n ? Math.round(((n[19 + i] || 0) + (n[25 + i] || 0) * (card.level - 1)) * mult) : 0; });
   const pot = [card.pot_att, card.pot_att, card.pot_def, card.pot_def, card.pot_ckr, card.pot_ckr];
   KEYS.forEach((k, i) => { o[k] += pot[i] || 0; });
@@ -596,6 +608,8 @@ function teamStats(db, uid, sid) {
   tot = addStats(tot, bonus);
   const gb = gateBonus(gateLevel(db, uid, sid));
   if (gb.flat) { const g = {}; KEYS.forEach((k) => { g[k] = gb.flat + Math.round((tot[k] || 0) * gb.pct); }); tot = addStats(tot, g); }
+  const pb = require('./pet').teamBonus(db, uid, sid); // master + helper pets (required here: pet.js requires this file)
+  tot = addStats(tot, { al: pb.attack, ah: pb.attack, dl: pb.defense, dh: pb.defense, cl: pb.chakala, ch: pb.chakala });
   return { slots, total: tot, suits, bonus };
 }
 
@@ -758,4 +772,4 @@ function godSynth(db, pl, attSeq, defSeq) {
   return { ninja: god, seq: giveCard(db, pl.uid, pl.server_id, god) };
 }
 
-module.exports = { grantDrop, mergeAwards,godSynth, potentialXml, potentialRoll, potentialSave, newlife, NEWLIFE_MAX, NEWLIFE_COST, arenaListXml, arenaRankXml, arenaFight, gateXml, gateOpen, gateLevel, gateBonus, friendsXml, sageGrow, giveEquip, teamStats, awardXml, secretXml, secretBuy, soulOf, equip, strengthen, packBuy, propUse, propCounts, propAdd, shopBuy, actXml, actClaim, sparFight, rivalsXml, rivals, bumpTask, dailyXml, dailyClaim, awardFull, addExp, battleXml, getStage, setStage, pull, pullXml, table, ninjas, ensure, giveCard, ensureStarterTeam, stateXml, cardXml };
+module.exports = { grantDrop, mergeAwards, ninjaStats, CHIP_BASE, chipCount, chipbagXml, godSynth, potentialXml, potentialRoll, potentialSave, newlife, NEWLIFE_MAX, NEWLIFE_COST, arenaListXml, arenaRankXml, arenaFight, gateXml, gateOpen, gateLevel, gateBonus, friendsXml, sageGrow, giveEquip, teamStats, awardXml, secretXml, secretBuy, soulOf, equip, strengthen, packBuy, propUse, propCounts, propAdd, shopBuy, actXml, actClaim, sparFight, rivalsXml, rivals, bumpTask, dailyXml, dailyClaim, awardFull, addExp, battleXml, getStage, setStage, pull, pullXml, table, ninjas, ensure, giveCard, ensureStarterTeam, stateXml, cardXml };
