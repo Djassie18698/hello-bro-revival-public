@@ -12,6 +12,7 @@ const boss = require('./boss');
 const country = require('./country');
 const war = require('./war');
 const seals = require('./seals');
+const border = require('./border');
 
 const esc = (s) => String(s).replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
 const el = (name, v) => `<${name}>${esc(v)}</${name}>`;
@@ -91,6 +92,14 @@ const TOPUPS = [ // the original Google Play packages (rmb = price in cents)
 const SWEEP_DAILY = 5;
 const sweepKey = () => 100000 + Math.floor(Date.now() / 86400000);
 const sweepsUsed = (db, uid, sid) => game.getStage(db, uid, sid, sweepKey()) - 1;
+
+function borderCall({ db, params: p }, fn) {
+  const acc = accountBySession(db, p);
+  const pl = acc && db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(acc.uid, Number(p.ServerID || 1));
+  if (!pl) return '<root code="3"><message>session expired</message></root>';
+  const r = fn(db, pl, p);
+  return `<root code="${r.code}"${r.msg ? ` msg="${r.msg}"` : ''}>${r.xml || ''}${r.msg ? `<message>${r.msg}</message>` : ''}</root>`;
+}
 
 module.exports = {
   // Server directory: server list + notices
@@ -709,6 +718,16 @@ module.exports = {
     const r = boss.fight(db, pl);
     return r.error ? `<root code="5"><message>${r.error}</message></root>` : '<root code="0">' + r.xml + '</root>';
   },
+
+  // Border war / Boundary Monument (border.js). All Lua screens; Country = the country being viewed (0-4).
+  rl_r_frontiers_war_info: (c) => borderCall(c, (db, pl, p) => ({ code: 0, xml: border.infoXml(db, pl, Number.isInteger(Number(p.Country)) && p.Country !== undefined ? Number(p.Country) : pl.country, Number(p.Cmd)) })),
+  rl_r_frontiers_war_user_info: (c) => borderCall(c, (db, pl) => ({ code: 0, xml: border.userXml(db, pl) })),
+  rl_r_frontiers_war_attack: (c) => borderCall(c, (db, pl, p) => border.attack(db, pl, Number(p.Cmd), Number(p.ToCountry))),
+  rl_r_frontiers_war_enemy_info: (c) => borderCall(c, (db, pl, p) => ({ code: 0, xml: border.enemyXml(db, pl, p.Country !== undefined ? Number(p.Country) : pl.country) })),
+  rl_r_frontiers_war_clear: (c) => borderCall(c, (db, pl, p) => border.clear(db, pl, Number(p.ToUid))),
+  rl_r_frontiers_war_award_info: (c) => borderCall(c, (db, pl) => ({ code: 0, xml: border.awardInfoXml(db, pl) })),
+  rl_r_frontiers_war_recv_award: (c) => borderCall(c, (db, pl, p) => border.recv(db, pl, Number(p.Cmd))),
+  rl_r_frontiers_war_rank: (c) => borderCall(c, (db, pl, p) => ({ code: 0, xml: border.rankXml(db, pl, Number(p.Cmd)) })),
 
   // Growth / star strengthening (rl_w_star): Cmd 3 = rate table, others = do one upgrade attempt.
   rl_w_star: ({ db, params: p }) => {

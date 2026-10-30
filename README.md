@@ -19,7 +19,9 @@ Game-side fixes are pushed to players automatically through the game's own updat
 
 plunder (steal tailed-beast seal fragments, combine and equip seals).
 
-Not yet: border war, adventure. See the roadmap in `docs/ROADMAP.md`.
+border war (Boundary Monument: taunt/wander, monuments, rankings).
+
+Not yet: adventure, tear raids. See the roadmap in `docs/ROADMAP.md`.
 
 ## Run your own server (Windows)
 1. Install **Node.js 22 or newer** (https://nodejs.org) and **Python 3**, plus a **JDK** (for signing the app).
