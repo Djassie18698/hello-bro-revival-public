@@ -10,3 +10,4 @@ data/*
 !data/activity_packs.json
 _base.apk
 node_modules/
+__pycache__/
