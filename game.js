@@ -162,6 +162,26 @@ function awardXml(c) {
   return '<award dropid="1"><cardlist><card>' + el('id', c.ninja) + el('type', 1) + el('num', 1) + el('attri', 0) + el('bagIndex', c.seq) + el('level', 1) + el('newlife', 0) + el('starlevel', 0) +
     '</card></cardlist><proplist></proplist><chipbag></chipbag><coin>0</coin><cash>0</cash><exp>0</exp><chip>0</chip><action>0</action><merit>0</merit><pk_action>0</pk_action><soul>0</soul></award>';
 }
+// ---- Real game drops (dropinfo.dbf): [3] ninja, [4] equipment, [5] ninjutsu, [6] mark, [7] prop, [8] equip piece,
+// [9] silver, [10] gold, [11] souls, [12] drop type, [13] count. Grants the reward and returns a full <award>.
+function grantDrop(db, pl, dropId) {
+  const r = table('dropinfo').rows.find((x) => x[0] === dropId);
+  if (!r) return null;
+  const n = r[13] || 1;
+  const cards = [], props = [];
+  let coin = 0, cash = 0, soul = 0;
+  if (r[3] > 0) for (let i = 0; i < n; i++) cards.push({ type: 1, id: r[3], seq: giveCard(db, pl.uid, pl.server_id, r[3]) });
+  else if (r[4] > 0) for (let i = 0; i < n; i++) { const seq = giveEquip(db, pl.uid, pl.server_id, r[4]); if (seq) cards.push({ type: db.prepare('SELECT type FROM cards WHERE seq=?').get(seq).type, id: r[4], seq }); }
+  else if (r[7] > 0) { propAdd(db, pl.uid, pl.server_id, r[7], n); props.push({ id: r[7], num: n }); }
+  else if (r[9] > 0) coin = r[9] * n;
+  else if (r[10] > 0) cash = r[10] * n;
+  else if (r[11] > 0) { soul = r[11] * n; propAdd(db, pl.uid, pl.server_id, 9999, soul); }
+  if (coin || cash) db.prepare('UPDATE players SET coin=coin+?, gold=gold+? WHERE uid=? AND server_id=?').run(coin, cash, pl.uid, pl.server_id);
+  const cardXml = cards.map((c) => '<card>' + el('id', c.id) + el('type', c.type) + el('num', 1) + el('attri', 0) + el('bagIndex', c.seq) + el('level', 1) + el('newlife', 0) + el('starlevel', 0) + '</card>').join('');
+  const propXml = props.map((x) => '<prop>' + el('id', x.id) + el('num', x.num) + '</prop>').join('');
+  return `<award dropid="${dropId}" coin="${coin}"><cardlist>${cardXml}</cardlist><proplist>${propXml}</proplist><chipbag></chipbag>` +
+    `${el('coin', coin)}${el('cash', cash)}<exp>0</exp><chip>0</chip><action>0</action><merit>0</merit><pk_action>0</pk_action>${el('soul', soul)}</award>`;
+}
 // Cmd 1900 (one pull): <recruit .../> attributes + <award>. Cmd 1901 (ten pulls): <recruit_list> of exactly 10 <item><award>.
 function pullXml(res, count) {
   if (count === 1) {
@@ -316,7 +336,7 @@ function actXml(db, pl) {
   const subs = (a) => a.map((i) => `<subitem subid="${i}"></subitem>`).join('');
   return `<activity type="1" loginallnum="${c.days}"><item actid="1">${subs(c.login)}</item></activity>` +
     `<activity type="2"><item actid="2">${subs(c.up)}</item></activity><activity type="3"><item actid="3" pos="-1"></item></activity><activity type="4"><item actid="4"></item></activity>` +
-    '<conf><items>' + [[1, 1, 2], [2, 2, 2], [41, 3, 2], [20, 4, 1], [21, 5, 1]].map(([id, pos, type]) => `<item><id>${id}</id><pos>${pos}</pos><status>1</status><onoff>1</onoff><type>${type}</type></item>`).join('') + '</items></conf>';
+    '<conf><items>' + [[1, 1, 2], [2, 2, 2], [41, 3, 2], [20, 4, 1], [21, 5, 1], [12, 6, 2]].map(([id, pos, type]) => `<item><id>${id}</id><pos>${pos}</pos><status>1</status><onoff>1</onoff><type>${type}</type></item>`).join('') + '</items><xiaoopen>1</xiaoopen><gambletype>1</gambletype></conf>';
 }
 function actClaim(db, pl, actid, subid) {
   const c = actClaimable(db, pl);
@@ -702,4 +722,4 @@ function godSynth(db, pl, attSeq, defSeq) {
   return { ninja: god, seq: giveCard(db, pl.uid, pl.server_id, god) };
 }
 
-module.exports = { godSynth, potentialXml, potentialRoll, potentialSave, newlife, NEWLIFE_MAX, NEWLIFE_COST, arenaListXml, arenaRankXml, arenaFight, gateXml, gateOpen, gateLevel, gateBonus, friendsXml, sageGrow, giveEquip, teamStats, awardXml, secretXml, secretBuy, soulOf, equip, strengthen, packBuy, propUse, propCounts, propAdd, shopBuy, actXml, actClaim, sparFight, rivalsXml, rivals, bumpTask, dailyXml, dailyClaim, awardFull, addExp, battleXml, getStage, setStage, pull, pullXml, table, ninjas, ensure, giveCard, ensureStarterTeam, stateXml, cardXml };
+module.exports = { grantDrop, godSynth, potentialXml, potentialRoll, potentialSave, newlife, NEWLIFE_MAX, NEWLIFE_COST, arenaListXml, arenaRankXml, arenaFight, gateXml, gateOpen, gateLevel, gateBonus, friendsXml, sageGrow, giveEquip, teamStats, awardXml, secretXml, secretBuy, soulOf, equip, strengthen, packBuy, propUse, propCounts, propAdd, shopBuy, actXml, actClaim, sparFight, rivalsXml, rivals, bumpTask, dailyXml, dailyClaim, awardFull, addExp, battleXml, getStage, setStage, pull, pullXml, table, ninjas, ensure, giveCard, ensureStarterTeam, stateXml, cardXml };

@@ -7,6 +7,8 @@ const signin = require('./signin');
 const guild = require('./guild');
 const mora = require('./mora');
 const slot = require('./slot');
+const rankings = require('./rankings');
+const boss = require('./boss');
 
 const esc = (s) => String(s).replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
 const el = (name, v) => `<${name}>${esc(v)}</${name}>`;
@@ -77,6 +79,16 @@ function mtree(db, p, shake) {
   return `<root code="0"><user><usedTimes>${m.used + 1}</usedTimes><freeTimes>${Math.max(0, free - 1)}</freeTimes><latestSilver>${win}</latestSilver><cash>${pl.gold - cost}</cash><coin>${pl.coin + win}</coin></user></root>`;
 }
 
+const TOPUPS = [ // the original Google Play packages (rmb = price in cents)
+  { id: 3, rmb: 99, gold: 45, give: 0 }, { id: 4, rmb: 499, gold: 240, give: 10 }, { id: 5, rmb: 999, gold: 490, give: 30 },
+  { id: 6, rmb: 1999, gold: 1050, give: 80 }, { id: 7, rmb: 4999, gold: 2700, give: 300 }, { id: 8, rmb: 9999, gold: 5500, give: 800 },
+];
+
+// Tower sweep counter: one progress row per day (stage = uses + 1; setStage keeps the max).
+const SWEEP_DAILY = 5;
+const sweepKey = () => 100000 + Math.floor(Date.now() / 86400000);
+const sweepsUsed = (db, uid, sid) => game.getStage(db, uid, sid, sweepKey()) - 1;
+
 module.exports = {
   // Server directory: server list + notices
   xk_r_dir: (ctx) =>
@@ -110,9 +122,17 @@ module.exports = {
 
   // Version / update check: nothing to update.
   rl_r_version: (ctx) => {
-    // val is far below any real client version, so the client never asks for an update.
-    const v = '<version val="0.0.1"><cdn>http://' + publicHost(ctx) + '/cdn/</cdn><filelist></filelist></version>';
-    return '<root code="0"><updateversion>' + v + '<force>0</force><notice><content></content></notice></updateversion>' + v + '</root>';
+    // Hot update: cdn/manifest.json = { "val": "x.y.z", "files": [{ name, val, md5, size }] }. Without a manifest the
+    // version is far below the client's, so it never downloads anything.
+    let man = { val: '0.0.1', files: [] };
+    try { man = JSON.parse(require('fs').readFileSync(require('path').join(__dirname, 'cdn', 'manifest.json'), 'utf8')); } catch (e) { /* no updates */ }
+    const files = man.files.map((f) => `<file name="${f.name}" val="${f.val}" md5="${f.md5}" size="${f.size}" ignor="0" force="0"/>`).join('');
+    const cdn = `<cdn>http://${publicHost(ctx)}/cdn/</cdn>`;
+    // Both blocks have the children <version val/>, <cdn>, <filelist><file .../></filelist> directly under them.
+    // <updateversion> = APK updater (Java, would download a whole APK): kept below the client so it never fires.
+    // <updatechip> = in-game resource updater (CDialogUpdateProgressView): carries our hot-update zips.
+    return '<root code="0"><updateversion><version val="0.0.1"/>' + cdn + '<filelist></filelist><force>0</force><notice><content></content></notice></updateversion>' +
+      `<updatechip><version val="${man.val}"/>${cdn}<filelist>${files}</filelist><ptfilelist></ptfilelist></updatechip></root>`;
   },
 
   // Activity / event badges (Lua side). Nothing running.
@@ -215,10 +235,15 @@ module.exports = {
 
   // Mailbox / notices (nothing yet), scrolling bulletin, activity list (no events), lucky wheel info.
   // Mailbox: Cmd 1802 = system notices (a welcome message), 1800 fights / 1801 friends stay empty.
-  rl_r_msg: ({ params: p }) => {
+  // Mailbox (Cmd 1802): welcome note + messages other players sent with the friend "Communicate" button (rl_w_friend Msg).
+  rl_r_msg: ({ db, params: p }) => {
     if (Number(p.Cmd) !== 1802) return '<root code="0"><msglist></msglist></root>';
     const now = Math.floor(Date.now() / 1000);
-    return `<root code="0"><msglist><msg><iTime>${now}</iTime><ID>1</ID><iStatus>1</iStatus><text>Welcome back to Hello Bro! Offline revival server.</text></msg></msglist></root>`;
+    const acc = accountBySession(db, p);
+    db.exec('CREATE TABLE IF NOT EXISTS mail (id INTEGER PRIMARY KEY AUTOINCREMENT, to_uid INTEGER, from_nick TEXT, text TEXT, ts INTEGER)');
+    const mails = acc ? db.prepare('SELECT * FROM mail WHERE to_uid=? ORDER BY id DESC LIMIT 50').all(acc.uid) : [];
+    const items = mails.map((m) => `<msg><iTime>${m.ts}</iTime><ID>${m.id + 1}</ID><iStatus>1</iStatus><text>${esc(m.from_nick + ': ' + m.text)}</text></msg>`).join('');
+    return `<root code="0"><msglist>${items}<msg><iTime>${now}</iTime><ID>1</ID><iStatus>1</iStatus><text>Welcome back to Hello Bro! Revival server.</text></msg></msglist></root>`;
   },
   rl_r_bulletin: () => {
     const now = Math.floor(Date.now() / 1000);
@@ -289,7 +314,34 @@ module.exports = {
     if (!acc) return '<root code="3"><message>session expired</message></root>';
     return '<root code="0">' + game.awardFull({}) + '</root>';
   },
-  rl_r_paypack: () => '<root code="0"><payheaplist></payheaplist></root>',
+  // Top-up screen header (VIP bar) + first-recharge gift state. Everyone is VIP on this server.
+  rl_r_paypack: ({ db, params: p }) => {
+    const acc = accountBySession(db, p);
+    const lv = acc ? vip.level(db, acc.uid, Number(p.ServerID || 1)) : 0;
+    return `<root code="0"><payheaplist></payheaplist><maxlv>${vip.MAX_VIP}</maxlv><exp>${lv * 1000}</exp><lvexp>${(lv + 1) * 1000}</lvexp>` +
+      '<canget>1</canget><first_pay>1</first_pay><multiple>1</multiple><servertime>0</servertime><endtime>0</endtime></root>';
+  },
+  // Top-up packages. Buying is FREE here (the hot-updated ui_purchaseLayer.lua calls rl_x_free_topup instead of Google Play).
+  rl_r_readconf: () => '<root code="0"><payact><mul>1</mul><bOpen>0</bOpen></payact><rechargelist>' +
+    TOPUPS.map((t) => `<item><recharge_id>${t.id}</recharge_id><recharge_rmb>${t.rmb}</recharge_rmb><recharge_yuanbao>${t.gold}</recharge_yuanbao><recharge_yuanbao_give>${t.give}</recharge_yuanbao_give></item>`).join('') +
+    '</rechargelist></root>',
+  // Native top-up button: the client asks for a Google Play order. We grant the gold right away and answer code 1
+  // ("Successfully purchased"), so the client never opens Google Play. Gold shows after the next screen refresh.
+  rl_w_ky_payorder: ({ db, params: p }) => {
+    const acc = accountBySession(db, p);
+    const t = TOPUPS.find((x) => x.id === Number(p.ItemId));
+    if (acc && t) db.prepare('UPDATE players SET gold=gold+? WHERE uid=? AND server_id=?').run(t.gold + t.give, acc.uid, Number(p.ServerID || 1));
+    return '<root code="1"></root>';
+  },
+  rl_x_free_topup: ({ db, params: p }) => {
+    const acc = accountBySession(db, p);
+    const pl = acc && db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(acc.uid, Number(p.ServerID || 1));
+    if (!pl) return '<root code="3"><message>session expired</message></root>';
+    const t = TOPUPS.find((x) => x.id === Number(p.RechargeId));
+    if (!t) return '<root code="5"><message>bad package</message></root>';
+    db.prepare('UPDATE players SET gold=gold+? WHERE uid=? AND server_id=?').run(t.gold + t.give, pl.uid, pl.server_id);
+    return '<root code="0">' + game.awardFull({ cash: t.gold + t.give }) + '</root>';
+  },
   // Hall of fame: all real players ranked by level.
   rl_r_ninja_rank: ({ db, params: p }) => {
     const acc = accountBySession(db, p);
@@ -448,7 +500,7 @@ module.exports = {
     const pl = acc && db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(acc.uid, Number(p.ServerID || 1));
     if (!pl) return '<root code="3"><message>session expired</message></root>';
     const cmd = Number(p.Cmd);
-    if (cmd === 16) return '<root code="0"><basic><status>2</status><amount>4900</amount><current>4900</current></basic><awards><item><id>1</id><num>1</num></item></awards></root>';
+    if (cmd === 16) return '<root code="0"><basic><status>2</status><amount>4900</amount><current>4900</current></basic><awards><item icon1="props_015" icon2="props_049" icon3="props_073"><id>1</id><num>1</num></item></awards></root>';
     if (cmd === 3) return '<root code="0">' + mora.infoXml(db, pl) + '</root>';
     if (cmd === 20) return '<root code="0"><basic><prop_num>99</prop_num></basic></root>';
     if (cmd === 8) return '<root code="0"><basic><cost_prop>1</cost_prop><prop_num>99</prop_num></basic></root>';
@@ -531,6 +583,74 @@ module.exports = {
     return '<root code="0"></root>';
   },
 
+  // Wheel of Fortune ranking and its rank / points gifts.
+  rl_r_fwheel_rank: ({ db, params: p }) => {
+    const acc = accountBySession(db, p);
+    const pl = acc && db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(acc.uid, Number(p.ServerID || 1));
+    return pl ? '<root code="0">' + rankings.wheelRankXml(db, pl) + '</root>' : '<root code="3"><message>session expired</message></root>';
+  },
+  rl_w_wheel_gift: ({ db, params: p }) => {
+    const acc = accountBySession(db, p);
+    const pl = acc && db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(acc.uid, Number(p.ServerID || 1));
+    if (!pl) return '<root code="3"><message>session expired</message></root>';
+    const r = rankings.wheelGift(db, pl, Number(p.Cmd), Number(p.GiftId));
+    return r.error ? `<root code="5"><message>${r.error}</message></root>` : '<root code="0">' + r.xml + '</root>';
+  },
+
+  // Arena extras: Cmd 1 = exchange tab opened, Cmd 2 = exchange reputation (prop 9996) for exchange_award row Exchg,
+  // Cmd 3 = daily rank reward.
+  rl_x_sport_ext: ({ db, params: p }) => {
+    const acc = accountBySession(db, p);
+    const pl = acc && db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(acc.uid, Number(p.ServerID || 1));
+    if (!pl) return '<root code="3"><message>session expired</message></root>';
+    const cmd = Number(p.Cmd);
+    if (cmd === 2) {
+      const row = game.table('exchange_award').rows.find((r) => r[0] === Number(p.Exchg));
+      if (!row) return '<root code="5"><message>bad item</message></root>';
+      const rep = game.propCounts(db, pl.uid, pl.server_id)[9996] || 0;
+      if (rep < row[6]) return '<root code="5"><message>not enough reputation</message></root>';
+      game.propAdd(db, pl.uid, pl.server_id, 9996, -row[6]);
+      return '<root code="0">' + game.grantDrop(db, pl, row[7]) + '</root>';
+    }
+    if (cmd === 3) {
+      db.exec('CREATE TABLE IF NOT EXISTS rank_claims (uid INTEGER, server_id INTEGER, board TEXT, key TEXT, PRIMARY KEY(uid,server_id,board,key))');
+      const ok = db.prepare('INSERT OR IGNORE INTO rank_claims VALUES(?,?,?,?)').run(pl.uid, pl.server_id, 'arena', new Date().toISOString().slice(0, 10)).changes;
+      if (!ok) return '<root code="5"><message>already claimed today</message></root>';
+      const r = db.prepare('SELECT rank FROM arena WHERE uid=?').get(pl.uid);
+      const rank = r ? r.rank : 999, coin = Math.max(2000, 50000 - rank * 1000), rep = Math.max(50, 1000 - rank * 20);
+      game.propAdd(db, pl.uid, pl.server_id, 9996, rep);
+      db.prepare('UPDATE players SET coin=coin+? WHERE uid=? AND server_id=?').run(coin, pl.uid, pl.server_id);
+      return '<root code="0">' + game.awardFull({ coin }) + '</root>';
+    }
+    // Cmd 1: the client treats a code-0 reply as a reward to show (and crashes without one); the list itself comes
+    // from the client's exchange_award table, so answer "nothing to collect".
+    return '<root code="1"></root>';
+  },
+
+  // World boss (fightBossView.lua). Cmd 1 info, 3 dice, 4 claim rank award, 6 hero ranking, 7 exchange, 8 boss hp, 10 clear cd, 11 fight feed.
+  rl_w_xiao: ({ db, params: p }) => {
+    const acc = accountBySession(db, p);
+    const pl = acc && db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(acc.uid, Number(p.ServerID || 1));
+    if (!pl) return '<root code="3"><message>session expired</message></root>';
+    const cmd = Number(p.Cmd), wrap = (r) => (r.error ? `<root code="5"><message>${r.error}</message></root>` : '<root code="0">' + r.xml + '</root>');
+    if (cmd === 3) return wrap(boss.dice(db, pl));
+    if (cmd === 4) return wrap(boss.claim(db, pl));
+    if (cmd === 6) return '<root code="0">' + boss.heroXml(db, pl) + '</root>';
+    if (cmd === 7) return wrap(boss.exchange(db, pl, Number(p.Exchangeid)));
+    if (cmd === 8) return '<root code="0">' + boss.bossInfo(db, pl) + '</root>';
+    if (cmd === 9) return '<root code="0"><preview addval="0" addall="0"/></root>';
+    if (cmd === 10) return wrap(boss.clearCd(db, pl));
+    if (cmd === 11) return '<root code="0">' + boss.msgs(db, pl, Number(p.MsgImportID), Number(p.MsgNormalID)) + '</root>';
+    return '<root code="0">' + boss.infoXml(db, pl) + '</root>';
+  },
+  rl_w_xiao_war: ({ db, params: p }) => {
+    const acc = accountBySession(db, p);
+    const pl = acc && db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(acc.uid, Number(p.ServerID || 1));
+    if (!pl) return '<root code="3"><message>session expired</message></root>';
+    const r = boss.fight(db, pl);
+    return r.error ? `<root code="5"><message>${r.error}</message></root>` : '<root code="0">' + r.xml + '</root>';
+  },
+
   // Growth / star strengthening (rl_w_star): Cmd 3 = rate table, others = do one upgrade attempt.
   rl_w_star: ({ db, params: p }) => {
     if (Number(p.Cmd) === 3) {
@@ -558,7 +678,16 @@ module.exports = {
     if (!pl) return '<root code="3"><message>session expired</message></root>';
     return '<root code="0">' + game.friendsXml(db, pl, String(p.Nick || '')) + '</root>';
   },
-  rl_w_friend: () => '<root code="0"></root>',
+  // Friend actions. With Msg + ToUid it is a chat/invite message: delivered to the other player's mailbox.
+  rl_w_friend: ({ db, params: p }) => {
+    const acc = accountBySession(db, p);
+    const pl = acc && db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(acc.uid, Number(p.ServerID || 1));
+    if (pl && p.Msg && Number(p.ToUid)) {
+      db.exec('CREATE TABLE IF NOT EXISTS mail (id INTEGER PRIMARY KEY AUTOINCREMENT, to_uid INTEGER, from_nick TEXT, text TEXT, ts INTEGER)');
+      db.prepare('INSERT INTO mail(to_uid,from_nick,text,ts) VALUES(?,?,?,?)').run(Number(p.ToUid), pl.nick, String(p.Msg).slice(0, 200), Math.floor(Date.now() / 1000));
+    }
+    return '<root code="0"></root>';
+  },
 
   // Arena (ranked ladder): rl_r_sport Cmd 2000-ish = list, rl_r_sportrank = top 50, rl_w_sport Cmd 2008 = fight (ToRank).
   rl_r_sport: ({ db, params: p }) => {
@@ -580,17 +709,48 @@ module.exports = {
 
   // Battles / tower ("dup"): Cmd 7000 = chapter list; rl_w_dup Cmd 3100 (Chap, Round) = fight. A chapter has 6 rounds; process = the round to fight next.
   rl_r_dup: ({ db, params: p }) => {
-    if (Number(p.Cmd) === 7002) return '<root code="0"><dup_count><total>5</total><remain>5</remain><vip>0</vip></dup_count><dup_list></dup_list></root>';
     const acc = accountBySession(db, p);
     const sid = Number(p.ServerID || 1);
+    if (Number(p.Cmd) === 7001) {
+      const pl = acc && db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(acc.uid, sid);
+      return pl ? '<root code="0">' + rankings.towerRankXml(db, pl) + '</root>' : '<root code="3"><message>session expired</message></root>';
+    }
+    if (Number(p.Cmd) === 7002) {
+      // Sweep screen: one entry per tower round (3 chapters x 6 rounds, id = (chap-1)*6+round); selectable once cleared.
+      const used = acc ? sweepsUsed(db, acc.uid, sid) : 0;
+      let list = '';
+      for (let c = 1; c <= 3; c++) for (let r = 1; r <= 6; r++) {
+        const done = acc && game.getStage(db, acc.uid, sid, 1000 + c) > r;
+        list += `<dup name="${c}-${r}" selectable="${done ? 1 : 0}"/>`;
+      }
+      return `<root code="0"><dup_count><total>${SWEEP_DAILY}</total><remain>${Math.max(0, SWEEP_DAILY - used)}</remain><vip>0</vip></dup_count><dup_list>${list}</dup_list></root>`;
+    }
     const chaps = [1, 2, 3].map((c) => `<dup><chapid>${c}</chapid><process>${acc ? game.getStage(db, acc.uid, sid, 1000 + c) : 1}</process></dup>`).join('');
     return `<root code="0"><duplist maxchap="3" current_round="1" remain_reset_count="3" status="0">${chaps}</duplist></root>`;
   },
   rl_w_dup: ({ db, params: p }) => {
     const acc = accountBySession(db, p);
     const sid = Number(p.ServerID || 1);
-    const pl = acc && db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(acc.uid, sid);
+    let pl = acc && db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(acc.uid, sid);
     if (!pl) return '<root code="3"><message>session expired</message></root>';
+    if (Number(p.Cmd) === 3102) {
+      // Sweep: DupId = 'id|id|..'; each costs one of the daily sweeps and pays the same reward as winning that round.
+      const ids = String(p.DupId || '').split('|').map(Number).filter((n) => n >= 1 && n <= 18);
+      const used = sweepsUsed(db, pl.uid, sid);
+      if (!ids.length || used + ids.length > SWEEP_DAILY) return '<root code="5"><message>no sweeps left</message></root>';
+      let list = '';
+      for (const id of ids) {
+        const c = Math.ceil(id / 6), r = ((id - 1) % 6) + 1;
+        if (game.getStage(db, pl.uid, sid, 1000 + c) <= r) return '<root code="5"><message>round not cleared</message></root>';
+        const ex = 60 * c, co = 90 * c;
+        game.addExp(db, pl, ex);
+        pl = db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(pl.uid, sid);
+        db.prepare('UPDATE players SET coin=coin+? WHERE uid=? AND server_id=?').run(co, pl.uid, sid);
+        list += `<dup name="${c}-${r}">${game.awardFull({ coin: co, exp: ex })}</dup>`;
+      }
+      game.setStage(db, pl.uid, sid, sweepKey(), used + ids.length + 1);
+      return '<root code="0"><dup_list>' + list + '</dup_list></root>';
+    }
     const chap = Number(p.Chap || 1), round = Number(p.Round || 1);
     const exp = 60 * chap, coin = 90 * chap;
     game.addExp(db, pl, exp);

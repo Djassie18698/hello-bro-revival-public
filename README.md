@@ -12,9 +12,11 @@ from it and builds a copy of the app that connects to your server.
 Login, team, backpack, gacha (single and 10x with card reveal), shop, VIP, training (all chapters),
 spar, arena ladder, tower, Akatsuki guilds (create, join, hall, donate, rankings), Eight Gates,
 sage growth, potential training, reincarnation, evolve (god cards), mora, money tree,
-wheel of fortune, month sign-in, daily tasks, events, friends, mail, admin page.
+wheel of fortune (with ranking), month sign-in, daily tasks, events, friends, player-to-player mail,
+world boss (shared daily boss with damage ranking), tower ranking, arena exchange shop, free top-up, admin page.
+Game-side fixes are pushed to players automatically through the game's own updater (see docs/HOT-UPDATE.md).
 
-Not yet: country war, border war, world boss, adventure. See the roadmap in `docs/ROADMAP.md`.
+Not yet: country war, border war, adventure. See the roadmap in `docs/ROADMAP.md`.
 
 ## Run your own server (Windows)
 1. Install **Node.js 22 or newer** (https://nodejs.org) and **Python 3**, plus a **JDK** (for signing the app).

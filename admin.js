@@ -18,7 +18,7 @@ const PAGE = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewp
 <div class="card"><h3>Players</h3><table id="players"></table></div>
 <div class="card"><h3>Give resources</h3>
  <div class="row"><select id="uid"></select>
- <select id="field"><option value="gold">Gold (ingots)</option><option value="coin">Coins</option><option value="energy">Energy</option><option value="level">Set level</option><option value="vip">Set VIP level (0-18)</option></select>
+ <select id="field"><option value="gold">Gold (ingots)</option><option value="coin">Coins</option><option value="energy">Energy</option><option value="level">Set level</option><option value="renown">Arena reputation</option><option value="souls">Ninja souls</option><option value="vip">Set VIP level (0-18)</option></select>
  <input id="amount" type="number" value="10000" style="width:120px"><button onclick="give()">Add / Set</button></div></div>
 <div class="card"><h3>Give a character</h3>
  <div class="row"><input id="q" placeholder="Search name (Naruto, Itachi...)" oninput="search()" style="flex:1;min-width:200px">
@@ -95,6 +95,7 @@ module.exports = async function admin(req, res, u, db, readBody) {
     const pl = db.prepare('SELECT * FROM players WHERE uid=?').get(b.uid);
     if (!pl) return json(res, { ok: false, error: 'no such player' });
     if (u.pathname === '/admin/api/give') {
+      if (b.field === 'renown' || b.field === 'souls') { game.propAdd(db, pl.uid, pl.server_id, b.field === 'renown' ? 9996 : 9999, Math.trunc(Number(b.amount)) || 0); return json(res, { ok: true }); }
       if (b.field === 'vip') { vip.setLevel(db, pl.uid, pl.server_id, Number(b.amount)); return json(res, { ok: true }); }
       const col = { gold: 'gold', coin: 'coin', energy: 'energy', level: 'level' }[b.field];
       if (!col) return json(res, { ok: false, error: 'bad field' });

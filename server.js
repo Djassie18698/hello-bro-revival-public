@@ -55,6 +55,15 @@ function logError(...a) {
 const httpServer = http.createServer({ insecureHTTPParser: true }, async (req, resp) => {
   if (limited(req)) { resp.writeHead(429); return resp.end('slow down'); }
   const u = url.parse(req.url, true);
+  // Hot-update files (see cdn/manifest.json and rl_r_version): plain static files, logged so downloads can be seen.
+  if (u.pathname.startsWith('/cdn/')) {
+    const fs = require('fs'), path = require('path');
+    const file = path.join(__dirname, 'cdn', path.normalize(decodeURIComponent(u.pathname.slice(5))).replace(/^([.][.][\/])+/, ''));
+    console.log(`[cdn] ${req.method} ${u.pathname} ${fs.existsSync(file) ? 'found' : 'MISSING'}`);
+    if (!file.startsWith(path.join(__dirname, 'cdn')) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) { resp.writeHead(404); return resp.end(); }
+    resp.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': fs.statSync(file).size });
+    return fs.createReadStream(file).pipe(resp);
+  }
   if (u.pathname.startsWith('/admin')) {
     try { return await admin(req, resp, u, db, parseBody); } catch (e) { logError('admin error', e); resp.writeHead(500); return resp.end('error'); }
   }
