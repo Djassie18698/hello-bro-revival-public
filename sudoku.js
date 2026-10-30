@@ -64,15 +64,6 @@ function search(db, pl) {
   save(db, pl, b.cells, b.made);
   return { xml: '<basic>' + el('cell_index', idx) + '</basic>' + costsXml(b.cells) + game.grantDrop(db, pl, b.cells[idx].id) };
 }
-// One <award> holding every prize (the client reads only the first <award>).
-function mergeAwards(list) {
-  const pick = (re) => list.map((a) => (a.match(re) || ['', ''])[1]).join('');
-  const sum = (tag) => list.reduce((s, a) => s + Number((a.match(new RegExp(`<${tag}>(\\d+)</${tag}>`)) || [0, 0])[1]), 0);
-  const coin = sum('coin');
-  return `<award dropid="${(list[0].match(/dropid="(\d+)"/) || [0, 1])[1]}" coin="${coin}"><cardlist>${pick(/<cardlist>(.*?)<\/cardlist>/)}</cardlist>` +
-    `<proplist>${pick(/<proplist>(.*?)<\/proplist>/)}</proplist><chipbag></chipbag>${el('coin', coin)}${el('cash', sum('cash'))}` +
-    '<exp>0</exp><chip>0</chip><action>0</action><merit>0</merit><pk_action>0</pk_action><soul>0</soul></award>';
-}
 function buyAll(db, pl) {
   const b = board(db, pl);
   const left = b.cells.filter((c) => !c.got);
@@ -80,7 +71,7 @@ function buyAll(db, pl) {
   if (!spend(db, pl, remainingCost(b.cells))) return { error: 'not enough gold' };
   const awards = left.map((c) => { c.got = 1; return game.grantDrop(db, pl, c.id); });
   save(db, pl, b.cells, b.made);
-  return { xml: mergeAwards(awards) };
+  return { xml: game.mergeAwards(awards) };
 }
 
 module.exports = { infoXml, refresh, search, buyAll };

@@ -15,6 +15,7 @@ const seals = require('./seals');
 const border = require('./border');
 const tear = require('./tear');
 const sudoku = require('./sudoku');
+const sevenday = require('./sevenday');
 
 const esc = (s) => String(s).replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
 const el = (name, v) => `<${name}>${esc(v)}</${name}>`;
@@ -324,12 +325,17 @@ module.exports = {
     const acc = accountBySession(db, p);
     const pl = acc && db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(acc.uid, Number(p.ServerID || 1));
     if (!pl) return '<root code="3"><message>session expired</message></root>';
+    if (Number(p.Cmd) === 9002) return '<root code="0">' + sevenday.stateXml(db, pl) + '</root>';
     return '<root code="0">' + game.actXml(db, pl) + '</root>';
   },
   rl_w_activity: ({ db, params: p }) => {
     const acc = accountBySession(db, p);
     const pl = acc && db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(acc.uid, Number(p.ServerID || 1));
     if (!pl) return '<root code="3"><message>session expired</message></root>';
+    if (Number(p.ActType) === 7) {
+      const s = sevenday.claim(db, pl, Number(p.ActID));
+      return s.error ? `<root code="5" msg="${s.error}"><message>${s.error}</message></root>` : '<root code="0">' + s.xml + '</root>';
+    }
     const r = game.actClaim(db, pl, Number(p.ActID), Number(p.SubID));
     if (!r) return '<root code="5"><message>not available</message></root>';
     return '<root code="0">' + game.awardFull(r) + '</root>';

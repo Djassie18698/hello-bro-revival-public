@@ -1,12 +1,12 @@
 // National treasure raids (CCountryTreasure, "tear"). Raid another country (rl_w_tearcountry ToCountry): if it has a
-// guard you fight them, otherwise you grab a treasure directly. Treasures are turned in (rl_w_tear) for 5000 silver
+// guard you fight them, otherwise you grab a treasure directly. Treasures are turned in (rl_w_tear) for 3000 silver
 // each. Any player can stand guard for their own country (rl_w_tearguard). 5 raids a day.
 const game = require('./game');
 
 const el = (n, v) => `<${n}>${v}</${n}>`;
 const esc = (t) => String(t == null ? '' : t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const day = () => new Date().toISOString().slice(0, 10);
-const RAIDS = 5, SILVER_EACH = 5000;
+const RAIDS = 5, SILVER_EACH = 3000; // the client's own text says 3000 silver per treasure
 
 function ensure(db) {
   db.exec(`CREATE TABLE IF NOT EXISTS tear (server_id INTEGER, uid INTEGER, day TEXT, raids INTEGER DEFAULT 0, bank INTEGER DEFAULT 0,
@@ -20,7 +20,8 @@ function me(db, pl) {
   if (t.day !== day()) { db.prepare('UPDATE tear SET day=?, raids=0 WHERE server_id=? AND uid=?').run(day(), pl.server_id, pl.uid); t.raids = 0; t.day = day(); }
   return t;
 }
-const others = (c) => [1, 2, 3].filter((x) => x !== c);
+const NATIONS = [0, 1, 2, 3, 4];
+const others = (c) => NATIONS.filter((x) => x !== c);
 function wins(db, sid, from, to) {
   const r = db.prepare('SELECT n FROM tear_win WHERE server_id=? AND day=? AND from_country=? AND to_country=?').get(sid, day(), from, to);
   return r ? r.n : 0;
@@ -30,11 +31,16 @@ function bankXml(db, pl) {
   const victory = others(pl.country).map((c) => `<country id="${c}" attack="${wins(db, pl.server_id, pl.country, c)}" defnese="${wins(db, pl.server_id, c, pl.country)}"/>`).join('');
   return '<trea><attack>' + el('canattack', t.raids < RAIDS ? 1 : 0) + el('resttime', 0) + el('restattacknum', RAIDS - t.raids) + '</attack>' +
     `<victory>${victory}</victory><award num="${t.bank}"/><awardhis coin="${t.coin_his}" merit="${t.merit_his}"/>` +
-    '<country>' + el('count', t.bank) + el('isguard', t.guard) + '</country></trea>';
+    '<country>' + el('count', nationTotal(db, pl)) + el('isguard', t.guard) + '</country></trea>';
+}
+// "Treasure Amount" on the screen = treasures the whole nation has turned in.
+function nationTotal(db, pl) {
+  const r = db.prepare('SELECT SUM(t.coin_his) s FROM tear t JOIN players p ON p.uid=t.uid AND p.server_id=t.server_id WHERE t.server_id=? AND p.country=?').get(pl.server_id, pl.country);
+  return Math.floor((r.s || 0) / SILVER_EACH);
 }
 function snatchXml(db, pl) {
   ensure(db);
-  const rows = [1, 2, 3].map((c) => {
+  const rows = NATIONS.map((c) => {
     const tear = (db.prepare('SELECT SUM(n) n FROM tear_win WHERE server_id=? AND day=? AND from_country=?').get(pl.server_id, day(), c).n) || 0;
     const grab = (db.prepare('SELECT SUM(n) n FROM tear_win WHERE server_id=? AND day=? AND to_country=?').get(pl.server_id, day(), c).n) || 0;
     return `<country id="${c}">${el('tearnum', tear)}${el('grabnum', grab)}</country>`;
