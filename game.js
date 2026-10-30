@@ -163,19 +163,33 @@ function awardXml(c) {
     '</card></cardlist><proplist></proplist><chipbag></chipbag><coin>0</coin><cash>0</cash><exp>0</exp><chip>0</chip><action>0</action><merit>0</merit><pk_action>0</pk_action><soul>0</soul></award>';
 }
 // ---- Real game drops (dropinfo.dbf): [3] ninja, [4] equipment, [5] ninjutsu, [6] mark, [7] prop, [8] equip piece,
-// [9] silver, [10] gold, [11] souls, [12] drop type, [13] count. Grants the reward and returns a full <award>.
+// [10] gold, [11] silver, [12] drop type (1 = random pack), [13] count. Grants the reward and returns a full <award>.
+// Random packs (type 1, no fixed item) are resolved from their description: shinobi packs roll a ninja,
+// equipment packs a piece of gear, gift packs a card or gold.
+function rollPack(r) {
+  const t = String(r[2]);
+  const star = /Five-Star Shinobi Card|Sage of the Six/.test(t) ? (Math.random() < 0.35 ? 5 : 4) : /Pack III/.test(t) ? (Math.random() < 0.2 ? 5 : 4) : /Pack II/.test(t) ? (Math.random() < 0.15 ? 4 : 3) : (Math.random() < 0.08 ? 5 : 3);
+  if (/Equipment/.test(t)) return { equip: randomEquip(1 + Math.floor(Math.random() * 3), star) };
+  if (/Gold/.test(t) && Math.random() < 0.3) return { cash: Number((t.match(/(\d+) Gold/) || [0, 300])[1]) };
+  if (/Ninjutsu/.test(t)) return { coin: 30000 };
+  const pool = pools()[star] || pools()[4];
+  return { ninja: pool[Math.floor(Math.random() * pool.length)] };
+}
 function grantDrop(db, pl, dropId) {
   const r = table('dropinfo').rows.find((x) => x[0] === dropId);
   if (!r) return null;
   const n = r[13] || 1;
   const cards = [], props = [];
   let coin = 0, cash = 0, soul = 0;
-  if (r[3] > 0) for (let i = 0; i < n; i++) cards.push({ type: 1, id: r[3], seq: giveCard(db, pl.uid, pl.server_id, r[3]) });
-  else if (r[4] > 0) for (let i = 0; i < n; i++) { const seq = giveEquip(db, pl.uid, pl.server_id, r[4]); if (seq) cards.push({ type: db.prepare('SELECT type FROM cards WHERE seq=?').get(seq).type, id: r[4], seq }); }
+  const pack = r[12] === 1 && !(r[3] > 0) && !(r[7] > 0) ? rollPack(r) : null;
+  const ninja = pack ? pack.ninja : r[3], equip = pack ? pack.equip : (r[3] > 0 ? 0 : r[4]);
+  if (ninja > 0) for (let i = 0; i < n; i++) cards.push({ type: 1, id: ninja, seq: giveCard(db, pl.uid, pl.server_id, ninja) });
+  else if (equip > 0) for (let i = 0; i < n; i++) { const seq = giveEquip(db, pl.uid, pl.server_id, equip); if (seq) cards.push({ type: db.prepare('SELECT type FROM cards WHERE seq=?').get(seq).type, id: equip, seq }); }
+  else if (pack) { cash = pack.cash || 0; coin = pack.coin || 0; }
   else if (r[7] > 0) { propAdd(db, pl.uid, pl.server_id, r[7], n); props.push({ id: r[7], num: n }); }
-  else if (r[9] > 0) coin = r[9] * n;
   else if (r[10] > 0) cash = r[10] * n;
-  else if (r[11] > 0) { soul = r[11] * n; propAdd(db, pl.uid, pl.server_id, 9999, soul); }
+  else if (r[11] > 0) coin = r[11] * n;
+  else if (r[5] > 0 || r[6] > 0 || r[8] > 0) coin = 20000 * n; // ninjutsu / seal / fragment cards are not modelled yet
   if (coin || cash) db.prepare('UPDATE players SET coin=coin+?, gold=gold+? WHERE uid=? AND server_id=?').run(coin, cash, pl.uid, pl.server_id);
   const cardXml = cards.map((c) => '<card>' + el('id', c.id) + el('type', c.type) + el('num', 1) + el('attri', 0) + el('bagIndex', c.seq) + el('level', 1) + el('newlife', 0) + el('starlevel', 0) + '</card>').join('');
   const propXml = props.map((x) => '<prop>' + el('id', x.id) + el('num', x.num) + '</prop>').join('');

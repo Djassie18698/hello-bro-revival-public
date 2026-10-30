@@ -13,10 +13,11 @@ Login, team, backpack, gacha (single and 10x with card reveal), shop, VIP, train
 spar, arena ladder, tower, Akatsuki guilds (create, join, hall, donate, rankings), Eight Gates,
 sage growth, potential training, reincarnation, evolve (god cards), mora, money tree,
 wheel of fortune (with ranking), month sign-in, daily tasks, events, friends, player-to-player mail,
-world boss (shared daily boss with damage ranking), tower ranking, arena exchange shop, free top-up, admin page.
+world boss (shared daily boss with damage ranking), country war (officials/Hokage seats, live war between the
+three countries, kill ticker, war exploit shop, individual and nation rankings), tower ranking, arena exchange shop, free top-up, admin page.
 Game-side fixes are pushed to players automatically through the game's own updater (see docs/HOT-UPDATE.md).
 
-Not yet: country war, border war, adventure. See the roadmap in `docs/ROADMAP.md`.
+Not yet: border war, adventure, plunder seals. See the roadmap in `docs/ROADMAP.md`.
 
 ## Run your own server (Windows)
 1. Install **Node.js 22 or newer** (https://nodejs.org) and **Python 3**, plus a **JDK** (for signing the app).
