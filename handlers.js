@@ -13,6 +13,8 @@ const country = require('./country');
 const war = require('./war');
 const seals = require('./seals');
 const border = require('./border');
+const tear = require('./tear');
+const sudoku = require('./sudoku');
 
 const esc = (s) => String(s).replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
 const el = (name, v) => `<${name}>${esc(v)}</${name}>`;
@@ -93,6 +95,7 @@ const SWEEP_DAILY = 5;
 const sweepKey = () => 100000 + Math.floor(Date.now() / 86400000);
 const sweepsUsed = (db, uid, sid) => game.getStage(db, uid, sid, sweepKey()) - 1;
 
+const tearRes = (r) => (r.error ? { code: 5, msg: r.error } : { code: 0, xml: r.xml });
 function borderCall({ db, params: p }, fn) {
   const acc = accountBySession(db, p);
   const pl = acc && db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(acc.uid, Number(p.ServerID || 1));
@@ -728,6 +731,20 @@ module.exports = {
   rl_r_frontiers_war_award_info: (c) => borderCall(c, (db, pl) => ({ code: 0, xml: border.awardInfoXml(db, pl) })),
   rl_r_frontiers_war_recv_award: (c) => borderCall(c, (db, pl, p) => border.recv(db, pl, Number(p.Cmd))),
   rl_r_frontiers_war_rank: (c) => borderCall(c, (db, pl, p) => ({ code: 0, xml: border.rankXml(db, pl, Number(p.Cmd)) })),
+
+  // Ninja Treasure board (sudoku.js, activity 24). rl_w_sudoku: Cmd 1 reroll, 2 one search, 3 buy all.
+  rl_r_sudoku: (c) => borderCall(c, (db, pl) => ({ code: 0, xml: sudoku.infoXml(db, pl) })),
+  rl_w_sudoku: (c) => borderCall(c, (db, pl, p) => {
+    const cmd = Number(p.Cmd);
+    return tearRes(cmd === 1 ? sudoku.refresh(db, pl) : cmd === 3 ? sudoku.buyAll(db, pl) : sudoku.search(db, pl));
+  }),
+
+  // National treasure raids (tear.js, C++ CCountryTreasure).
+  rl_r_tear: (c) => borderCall(c, (db, pl) => ({ code: 0, xml: tear.bankXml(db, pl) })),
+  rl_r_tearcountry: (c) => borderCall(c, (db, pl) => ({ code: 0, xml: tear.snatchXml(db, pl) })),
+  rl_w_tear: (c) => borderCall(c, (db, pl) => tearRes(tear.handin(db, pl))),
+  rl_w_tearcountry: (c) => borderCall(c, (db, pl, p) => tearRes(tear.raid(db, pl, Number(p.ToCountry)))),
+  rl_w_tearguard: (c) => borderCall(c, (db, pl) => tearRes(tear.toggleGuard(db, pl))),
 
   // Growth / star strengthening (rl_w_star): Cmd 3 = rate table, others = do one upgrade attempt.
   rl_w_star: ({ db, params: p }) => {
