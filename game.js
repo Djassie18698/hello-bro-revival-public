@@ -103,6 +103,21 @@ function equip(db, pl, slot, kind, newSeq) {
   else db.prepare('INSERT OR REPLACE INTO equipped(uid,server_id,slot,kind,seq) VALUES(?,?,?,?,?)').run(pl.uid, pl.server_id, slot, kind, newSeq);
 }
 
+// Team > card > Change (rl_w_ninjalist Cmd 2300): OldID = card leaving (0 for an empty slot), NewID = card joining.
+// A card already in the team trades places with the old one. Team slots are 0-based, at most 5 ninjas.
+function teamSwap(db, pl, oldSeq, newSeq) {
+  ensure(db);
+  const card = db.prepare('SELECT seq FROM cards WHERE seq=? AND uid=? AND server_id=? AND type=1').get(newSeq, pl.uid, pl.server_id);
+  if (!card) return 'no such ninja';
+  const team = db.prepare('SELECT slot, seq FROM team WHERE uid=? AND server_id=? ORDER BY slot').all(pl.uid, pl.server_id);
+  const set = (slot, seq) => db.prepare('INSERT OR REPLACE INTO team(uid,server_id,slot,seq) VALUES(?,?,?,?)').run(pl.uid, pl.server_id, slot, seq);
+  const from = team.find((t) => t.seq === oldSeq), there = team.find((t) => t.seq === newSeq);
+  if (from) { set(from.slot, newSeq); if (there) set(there.slot, oldSeq); return null; }
+  if (there) return null; // already in the team
+  if (team.length >= 5) return 'the team is full';
+  set(team.length ? Math.max(...team.map((t) => t.slot)) + 1 : 0, newSeq);
+  return null;
+}
 function stateXml(db, uid, sid) {
   ensure(db);
   const cards = db.prepare('SELECT * FROM cards WHERE uid=? AND server_id=? ORDER BY seq').all(uid, sid);
@@ -376,11 +391,12 @@ function actClaimable(db, pl) {
   return { days, login, up };
 }
 function actXml(db, pl) {
+  require('./stagegift').ensure(db);
   const c = actClaimable(db, pl);
   const subs = (a) => a.map((i) => `<subitem subid="${i}"></subitem>`).join('');
   return `<activity type="1" loginallnum="${c.days}"><item actid="1">${subs(c.login)}</item></activity>` +
     `<activity type="2"><item actid="2">${subs(c.up)}</item></activity><activity type="3"><item actid="3" pos="-1"></item></activity><activity type="4"><item actid="4"></item></activity>` +
-    '<conf><items>' + [[1, 1, 2], [2, 2, 2], [41, 3, 2], [20, 4, 1], [21, 5, 1], [12, 6, 2], [24, 7, 1], [47, 8, 2]].map(([id, pos, type]) => `<item><id>${id}</id><pos>${pos}</pos><status>1</status><onoff>1</onoff><type>${type}</type></item>`).join('') + '</items><xiaoopen>1</xiaoopen><gambletype>1</gambletype></conf>';
+    '<conf><items>' + [[1, 1, 2], [2, 2, 2], [41, 3, 2], [20, 4, 1], [21, 5, 1], [12, 6, 2], [24, 7, 1], [47, 8, 2]].map(([id, pos, type]) => `<item><id>${id}</id><pos>${pos}</pos><status>1</status><onoff>1</onoff><type>${type}</type></item>`).join('') + `<item><id>31</id><pos>9</pos><status>1</status><onoff>1</onoff><type>1</type><timeleft>${db.prepare('SELECT 1 FROM stagegift WHERE uid=? AND server_id=?').get(pl.uid, pl.server_id) ? 0 : 315360000}</timeleft></item>` + '</items><xiaoopen>1</xiaoopen><gambletype>1</gambletype></conf>';
 }
 function actClaim(db, pl, actid, subid) {
   const c = actClaimable(db, pl);
@@ -801,4 +817,4 @@ function godSynth(db, pl, attSeq, defSeq) {
   return { ninja: god, seq: giveCard(db, pl.uid, pl.server_id, god) };
 }
 
-module.exports = { grantDrop, mergeChips, mergeAwards, ninjaStats, CHIP_BASE, chipCount, chipbagXml, godSynth, potentialXml, potentialRoll, potentialSave, newlife, NEWLIFE_MAX, NEWLIFE_COST, arenaListXml, arenaRankXml, arenaFight, gateXml, gateOpen, gateLevel, gateBonus, friendsXml, sageGrow, giveEquip, teamStats, awardXml, secretXml, secretBuy, soulOf, equip, strengthen, packBuy, propUse, propCounts, propAdd, shopBuy, actXml, actClaim, sparFight, rivalsXml, rivals, bumpTask, dailyXml, dailyClaim, awardFull, addExp, battleXml, getStage, setStage, pull, pullXml, table, ninjas, ensure, giveCard, ensureStarterTeam, stateXml, cardXml };
+module.exports = { teamSwap, grantDrop, mergeChips, mergeAwards, ninjaStats, CHIP_BASE, chipCount, chipbagXml, godSynth, potentialXml, potentialRoll, potentialSave, newlife, NEWLIFE_MAX, NEWLIFE_COST, arenaListXml, arenaRankXml, arenaFight, gateXml, gateOpen, gateLevel, gateBonus, friendsXml, sageGrow, giveEquip, teamStats, awardXml, secretXml, secretBuy, soulOf, equip, strengthen, packBuy, propUse, propCounts, propAdd, shopBuy, actXml, actClaim, sparFight, rivalsXml, rivals, bumpTask, dailyXml, dailyClaim, awardFull, addExp, battleXml, getStage, setStage, pull, pullXml, table, ninjas, ensure, giveCard, ensureStarterTeam, stateXml, cardXml };

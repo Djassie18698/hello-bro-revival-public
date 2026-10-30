@@ -4,6 +4,7 @@ const game = require('./game');
 const vip = require('./vip');
 const wheel = require('./wheel');
 const signin = require('./signin');
+const stagegift = require('./stagegift');
 const guild = require('./guild');
 const mora = require('./mora');
 const slot = require('./slot');
@@ -402,6 +403,20 @@ module.exports = {
       '<canget>1</canget><first_pay>1</first_pay><multiple>1</multiple><servertime>0</servertime><endtime>0</endtime></root>';
   },
   // Top-up packages. Buying is FREE here (the hot-updated ui_purchaseLayer.lua calls rl_x_free_topup instead of Google Play).
+  // Starter stage gift (free) and trivial acks for payment-related calls.
+  rl_r_newbie_pay: ({ db, params: p }) => {
+    const acc = accountBySession(db, p);
+    const pl = acc && db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(acc.uid, Number(p.ServerID || 1));
+    if (!pl) return '<root code="3"><message>session expired</message></root>';
+    if (Number(p.Cmd) === 2) {
+      const r = stagegift.claim(db, pl);
+      return r.error ? `<root code="5"><message>${r.error}</message></root>` : '<root code="0">' + r.xml + '</root>';
+    }
+    return '<root code="0">' + stagegift.infoXml(db, pl) + '</root>';
+  },
+  rl_got: () => '<root code="0"></root>',
+  rl_r_ky_checkorder: () => '<root code="0"></root>',
+  rl_w_notify_gp: () => '<root code="0"></root>',
   rl_r_readconf: () => '<root code="0"><payact><mul>1</mul><bOpen>0</bOpen></payact><rechargelist>' +
     TOPUPS.map((t) => `<item><recharge_id>${t.id}</recharge_id><recharge_rmb>${t.rmb}</recharge_rmb><recharge_yuanbao>${t.gold}</recharge_yuanbao><recharge_yuanbao_give>${t.give}</recharge_yuanbao_give></item>`).join('') +
     '</rechargelist></root>',
@@ -483,11 +498,16 @@ module.exports = {
 
   // Team editing: Cmd 2301.. = equip card NewID into slot Seq (kind = Cmd - 2300).
   rl_w_ninjalist: ({ db, params: p }) => {
+    if (process.env.HB_DEBUG) console.log('ninjalist', JSON.stringify(p));
     const acc = accountBySession(db, p);
     const pl = acc && db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(acc.uid, Number(p.ServerID || 1));
     if (!pl) return '<root code="3"><message>session expired</message></root>';
     const kind = Number(p.Cmd) - 2300;
     if (kind >= 1 && kind <= 8) game.equip(db, pl, Number(p.Seq), kind, Number(p.NewID) || 0);
+    if (kind === 0) {
+      const err = game.teamSwap(db, pl, Number(p.OldID) || 0, Number(p.NewID) || 0);
+      if (err) return `<root code="5"><message>${err}</message></root>`;
+    }
     const gs = game.stateXml(db, pl.uid, pl.server_id);
     return `<root code="0"><teamid>${Number(p.TeamId) || 0}</teamid>${gs.suitlist}${gs.ninjalist}</root>`;
   },
