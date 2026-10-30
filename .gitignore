@@ -1,0 +1,12 @@
+# Never commit game files, saves or signing keys
+*.xapk
+*.apk
+*.obb
+*.keystore
+*.db
+backups/
+logs/
+data/*
+!data/activity_packs.json
+_base.apk
+node_modules/
