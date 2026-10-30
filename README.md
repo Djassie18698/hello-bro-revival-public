@@ -17,7 +17,9 @@ world boss (shared daily boss with damage ranking), country war (officials/Hokag
 three countries, kill ticker, war exploit shop, individual and nation rankings), tower ranking, arena exchange shop, free top-up, admin page.
 Game-side fixes are pushed to players automatically through the game's own updater (see docs/HOT-UPDATE.md).
 
-Not yet: border war, adventure, plunder seals. See the roadmap in `docs/ROADMAP.md`.
+plunder (steal tailed-beast seal fragments, combine and equip seals).
+
+Not yet: border war, adventure. See the roadmap in `docs/ROADMAP.md`.
 
 ## Run your own server (Windows)
 1. Install **Node.js 22 or newer** (https://nodejs.org) and **Python 3**, plus a **JDK** (for signing the app).

@@ -11,6 +11,7 @@ const rankings = require('./rankings');
 const boss = require('./boss');
 const country = require('./country');
 const war = require('./war');
+const seals = require('./seals');
 
 const esc = (s) => String(s).replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
 const el = (name, v) => `<${name}>${esc(v)}</${name}>`;
@@ -222,14 +223,27 @@ module.exports = {
     game.addExp(db, pl, r.exp);
     db.prepare('UPDATE players SET coin=coin+? WHERE uid=? AND server_id=?').run(r.coin, pl.uid, pl.server_id);
     if (r.win) { game.bumpTask(db, pl.uid, pl.server_id, 6); }
-    return '<root code="0"><userinfo><LastSPUpdatePastTime>0</LastSPUpdatePastTime></userinfo>' + r.xml + game.awardFull({ coin: r.coin, exp: r.exp }) + '</root>';
+    // Plunder (Chip = seal fragment id): a win usually steals the fragment.
+    const chip = Number(p.Chip) || 0;
+    const got = chip && seals.plunder(db, pl, chip, r.win);
+    // The fragment is stored on the server; the seal list re-reads counts (rl_r_markchip) when it is shown again.
+    const award = game.awardFull({ coin: r.coin, exp: r.exp });
+    return '<root code="0"><userinfo><LastSPUpdatePastTime>0</LastSPUpdatePastTime></userinfo>' + r.xml + award + (got ? '<message>Seal fragment plundered!</message>' : '') + '</root>';
   },
 
   // Plunder / seal list (no seals yet) and country war status (no war running).
+  // Tailed-beast seal fragments (Plunder screen), see seals.js.
   rl_r_markchip: ({ db, params: p }) => {
     const acc = accountBySession(db, p);
-    const pl = acc && db.prepare('SELECT gold FROM players WHERE uid=?').get(acc.uid);
-    return `<root code="0"><cash>${pl ? pl.gold : 0}</cash><chiplist></chiplist><markmerge></markmerge></root>`;
+    const pl = acc && db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(acc.uid, Number(p.ServerID || 1));
+    return pl ? '<root code="0">' + seals.listXml(db, pl) + '</root>' : '<root code="3"><message>session expired</message></root>';
+  },
+  rl_w_markchip: ({ db, params: p }) => {
+    const acc = accountBySession(db, p);
+    const pl = acc && db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(acc.uid, Number(p.ServerID || 1));
+    if (!pl) return '<root code="3"><message>session expired</message></root>';
+    const r = seals.merge(db, pl, Number(p.MarkID));
+    return r.error ? `<root code="5"><message>${r.error}</message></root>` : '<root code="0">' + r.xml + '</root>';
   },
   // Country war (War > War tab). Cmd 7200 status (also polled from home), 7300ish war info.
   rl_r_warnew: ({ db, params: p }) => {

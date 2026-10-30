@@ -554,13 +554,26 @@ function activeSuits(db, uid, sid) {
   }
   return Object.values(best);
 }
+// Seal (markinfo col 7, e.g. "ATK +35%"): multiplies that stat of the ninja wearing it.
+function sealBonus(st, markId) {
+  const m = table('markinfo').rows.find((r) => r[0] === markId);
+  const mm = m && /(ATK|DEF|CHA\w*)\s*\+(\d+)%/i.exec(String(m[7]));
+  if (!mm) return st;
+  const pct = Number(mm[2]) / 100, keys = /ATK/i.test(mm[1]) ? ['al', 'ah'] : /DEF/i.test(mm[1]) ? ['dl', 'dh'] : ['cl', 'ch'];
+  const o = { ...st };
+  for (const k of keys) o[k] = Math.round(o[k] * (1 + pct));
+  return o;
+}
 function teamStats(db, uid, sid) {
   ensure(db);
   const team = db.prepare('SELECT t.slot, c.* FROM team t JOIN cards c ON c.seq=t.seq WHERE t.uid=? AND t.server_id=? ORDER BY t.slot').all(uid, sid);
   const eqRows = db.prepare('SELECT e.slot, e.kind, c.* FROM equipped e JOIN cards c ON c.seq=e.seq WHERE e.uid=? AND e.server_id=?').all(uid, sid);
   const slots = team.map((c, i) => {
     let st = ninjaStats(c);
-    for (const e of eqRows.filter((x) => x.slot === i + 1)) st = addStats(st, equipStats(e));
+    for (const e of eqRows.filter((x) => x.slot === i + 1)) {
+      if (e.type === 5) { st = sealBonus(st, e.ninja_id); continue; } // tailed-beast seal: percentage bonus
+      st = addStats(st, equipStats(e));
+    }
     return { seq: c.seq, ninja_id: c.ninja_id, level: c.level, ...st };
   });
   let tot = slots.reduce((a, s) => addStats(a, s), {});
