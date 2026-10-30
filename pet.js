@@ -156,11 +156,10 @@ function train(db, pl, id, type) {
   db.prepare('UPDATE pets SET train=?, star=? WHERE id=?').run(exp, star, id);
   return { xml: '<basic>' + el('upgrade', up) + el('crit', crit) + el('train', exp) + el('current_cost', t.cost) + el('next_spec_cost', normalCost(c, type === 1 ? n + 1 : n)) + '</basic>' };
 }
-// Master pet id for fight XML (<master_pet><pet_id>), 0 when none.
-function masterPetId(db, uid, sid) {
+// Master pet for fight XML (<master_pet><id/><pet_id/>), null when none.
+function masterPet(db, uid, sid) {
   ensure(db);
-  const p = db.prepare('SELECT pet_id FROM pets WHERE uid=? AND server_id=? AND slot=0').get(uid, sid);
-  return p ? p.pet_id : 0;
+  return db.prepare('SELECT id, pet_id FROM pets WHERE uid=? AND server_id=? AND slot=0').get(uid, sid) || null;
 }
 
-module.exports = { addPet, listXml, circleXml, place, levelInfo, levelUp, rankInfo, rankUp, trainInfo, train, teamBonus, masterPetId };
+module.exports = { addPet, listXml, circleXml, place, levelInfo, levelUp, rankInfo, rankUp, trainInfo, train, teamBonus, masterPet };

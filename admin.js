@@ -28,6 +28,10 @@ const PAGE = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewp
  <div class="row"><input id="q2" placeholder="Search items / equipment (ramen, sword, pill...)" oninput="search2()" style="flex:1;min-width:200px">
  <select id="thing" style="min-width:260px"></select><input id="count2" type="number" value="1" style="width:70px"><button onclick="giveThing()">Give</button></div>
  <small>Items go into the backpack, equipment arrives as cards. Same player as selected above.</small></div>
+<div class="card"><h3>Reset a player</h3>
+ <div class="row"><button style="background:#c62828" onclick="resetPlayer()">Reset selected player</button>
+ <small>Deletes that player's character, cards, items and progress. Next time they press START they make a new character.
+ A backup of the save is made first (backups folder).</small></div></div>
 <div id="msg"></div>
 <script>
 const $=id=>document.getElementById(id);
@@ -41,8 +45,29 @@ async function search(){const d=await api('ninjas?q='+encodeURIComponent($('q').
 async function giveCard(){const r=await api('givecard',{uid:+$('uid').value,ninja:+$('ninja').value,count:+$('count').value});toast(r.ok?'Card(s) added - restart the game to see them':r.error);load();}
 async function search2(){const d=await api('things?q='+encodeURIComponent($('q2').value));$('thing').innerHTML=d.map(n=>'<option value="'+n.kind+':'+n.id+'">'+n.name+' ['+n.kind+(n.stars?' '+'★'.repeat(n.stars):'')+']</option>').join('');}
 async function giveThing(){const [k,i]=$('thing').value.split(':');const r=await api('givething',{uid:+$('uid').value,kind:k,id:+i,count:+$('count2').value});toast(r.ok?'Given - reopen the screen in game to see it':r.error);load();}
+async function resetPlayer(){const o=$('uid').selectedOptions[0];if(!o)return;if(!confirm('Reset '+o.text+'? Their character and everything they own will be deleted.'))return;
+ const r=await api('reset',{uid:+$('uid').value});toast(r.ok?'Player reset - close and reopen the game':r.error);load();}
 load();search();search2();
 </script></body></html>`;
+
+// Delete one player's character and everything tied to it (the login account stays, so the same device just makes a
+// new character). Shared tables that name the player another way are cleaned too. A save backup is written first.
+function resetPlayer(db, uid) {
+  const fs = require('fs'), path = require('path');
+  try {
+    const dir = path.join(__dirname, 'backups');
+    fs.mkdirSync(dir, { recursive: true });
+    db.exec(`VACUUM INTO '${path.join(dir, `before-reset-${uid}-${Date.now()}.db`).replace(/'/g, "''")}'`);
+  } catch (e) { /* backup is best effort */ }
+  const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((r) => r.name);
+  for (const t of tables) {
+    if (t === 'accounts' || t === 'sqlite_sequence') continue;
+    const cols = db.prepare(`PRAGMA table_info(${t})`).all().map((c) => c.name);
+    if (cols.includes('uid')) db.prepare(`DELETE FROM ${t} WHERE uid=?`).run(uid);
+  }
+  if (tables.includes('mail')) db.prepare('DELETE FROM mail WHERE to_uid=?').run(uid);
+  if (tables.includes('groups')) db.prepare('DELETE FROM groups WHERE leader_uid=?').run(uid);
+}
 
 const json = (res, o) => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(o)); };
 
@@ -110,6 +135,10 @@ module.exports = async function admin(req, res, u, db, readBody) {
       if (b.kind === 'item') { game.propAdd(db, pl.uid, pl.server_id, b.id, n); return json(res, { ok: true }); }
       if (b.kind === 'equip') { for (let i = 0; i < Math.min(n, 50); i++) if (!game.giveEquip(db, pl.uid, pl.server_id, b.id)) return json(res, { ok: false, error: 'unknown equipment' }); return json(res, { ok: true }); }
       return json(res, { ok: false, error: 'bad kind' });
+    }
+    if (u.pathname === '/admin/api/reset') {
+      resetPlayer(db, pl.uid);
+      return json(res, { ok: true });
     }
     if (u.pathname === '/admin/api/givecard') {
       if (!game.ninjas().has(b.ninja)) return json(res, { ok: false, error: 'unknown character' });

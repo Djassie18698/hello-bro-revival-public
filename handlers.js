@@ -20,6 +20,7 @@ const sevenday = require('./sevenday');
 const exam = require('./exam');
 const tupo = require('./tupo');
 const pet = require('./pet');
+const monopoly = require('./monopoly');
 
 const esc = (s) => String(s).replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
 const el = (name, v) => `<${name}>${esc(v)}</${name}>`;
@@ -55,15 +56,23 @@ function accountBySession(db, p, isLogin = false) {
 
 
 // Training stage fight: always a win for now; rewards come from roundinfo (cols: 22 energy cost, 23 exp, 24 coins).
+// Training stage: roundinfo row with [4] = chapter and [2] = stage number in it. [42] = clears needed before the next
+// stage opens (the "Progress 0/2" on screen), [38] = boss stage, [43] = boss tries per day ("Challenges left").
 function trainingFight(db, pl, chap, stage) {
-  const row = game.table('roundinfo').rows.find((r) => r[0] === stage) || [];
+  const row = game.stageRow(chap, stage) || [];
+  if (game.getStage(db, pl.uid, pl.server_id, chap) < stage) return '<root code="5"><message>stage not open yet</message></root>';
+  const st = game.stageState(db, pl, chap, stage);
+  if (row[38] && st.bossLeft <= 0) return '<root code="5"><message>no challenges left today</message></root>';
   const cost = row[22] || 3, exp = row[23] || 6, coin = row[24] || 15;
   const lv = game.addExp(db, pl, exp);
   db.prepare('UPDATE players SET coin=coin+?, energy=MAX(0,energy-?) WHERE uid=? AND server_id=?').run(coin, cost, pl.uid, pl.server_id);
-  game.setStage(db, pl.uid, pl.server_id, chap, stage + 1);
+  const now = game.stageCleared(db, pl, chap, stage);
+  if (now.clears >= (row[42] || 1)) game.setStage(db, pl.uid, pl.server_id, chap, stage + 1); // enough clears: next stage opens
+  if (stage >= game.chapterStages(chap) && now.clears >= (row[42] || 1) && chap < 19) game.setStage(db, pl.uid, pl.server_id, chap + 1, 1); // next chapter opens
   game.bumpTask(db, pl.uid, pl.server_id, 1); game.bumpTask(db, pl.uid, pl.server_id, 2);
   const energy = Math.max(0, pl.energy - cost);
-  const attrs = `curchapter="${chap}" curstage="${stage + 1}" pos="1" pos_time="0" pk_boss_times="0" curaction="${energy}" LastActionUpdatePastTime="0"`;
+  const cur = game.getStage(db, pl.uid, pl.server_id, chap);
+  const attrs = `curchapter="${chap}" curstage="${cur}" pos="1" pos_time="${now.clears}" pk_boss_times="${now.bossLeft}" curaction="${energy}" LastActionUpdatePastTime="0"`;
   return `<root code="0"><pve ${attrs}/><userinfo><LastSPUpdatePastTime>0</LastSPUpdatePastTime></userinfo>` + game.battleXml(db, pl, chap, stage) +
     game.awardFull({ coin, exp }) + '</root>';
 }
@@ -168,7 +177,7 @@ module.exports = {
     const pl = db.prepare('SELECT 1 FROM players WHERE uid=? AND server_id=?').get(acc.uid, Number(p.ServerID || 1));
     return (
       `<root code="0"><login_info>${el('hasreg', pl ? 1 : 0)}${el('userid', acc.uid)}${el('session', acc.session)}</login_info>` +
-      `${el('first_login', pl ? 0 : 1)}</root>`
+      `${el('first_login', 0)}</root>`
     );
   },
 
@@ -182,8 +191,12 @@ module.exports = {
     db.prepare(
       'INSERT OR IGNORE INTO players(uid,server_id,nick,country,card,created) VALUES(?,?,?,?,?,?)'
     ).run(acc.uid, sid, p.Nick || `Ninja${acc.uid}`, Number(p.Country || 1), Number(p.Card || 1), Date.now());
+    game.ensure(db);
+    if (db.prepare('SELECT COUNT(*) n FROM cards WHERE uid=? AND server_id=?').get(acc.uid, sid).n === 0)
+      db.prepare('UPDATE players SET gold=50, coin=18000 WHERE uid=? AND server_id=?').run(acc.uid, sid); // normalconfig 38/39
     game.ensureStarterTeam(db, acc.uid, sid, Number(p.Card || 1));
-    return `<root code="0"><login_info>${el('userid', acc.uid)}${el('session', acc.session)}</login_info></root>`;
+    // first_login 0 = skip the tutorial (CRegistScene/CLoginScene set the guide flag from it). Tutorial is off for now.
+    return `<root code="0"><login_info>${el('userid', acc.uid)}${el('session', acc.session)}</login_info>${el('first_login', 0)}</root>`;
   },
 
   // Main page / initial player data. Field names are the ones CPlayerDataMgr reads from <user>.
@@ -197,15 +210,18 @@ module.exports = {
     const lvRow = game.table('playerlevel').rows.find((r) => r[1] === pl.level);
     if (lvRow && pl.energy < lvRow[4]) { db.prepare('UPDATE players SET energy=? WHERE uid=? AND server_id=?').run(lvRow[4], pl.uid, pl.server_id); pl.energy = lvRow[4]; }
     const gs = game.stateXml(db, acc.uid, pl.server_id);
+    // Training chapters open one by one as the previous one is cleared (a new player is on chapter 1: the tutorial
+    // breaks if the client is told about a later chapter).
+    const cur = game.furthestChapter(db, acc.uid, pl.server_id);
     const f = { uid: acc.uid, nick: pl.nick, cash: pl.gold, coin: pl.coin, curaction: pl.energy, cursp: 10,
-      level: pl.level, country: pl.country, maxteammember: 5, activeTeamId: 0,
+      level: pl.level, country: pl.country, maxteammember: game.maxTeam(db, pl), activeTeamId: 0,
       attactlow: gs.totals.al, attacthigh: gs.totals.ah, defenselow: gs.totals.dl, defensehigh: gs.totals.dh, chakralow: gs.totals.cl, chakrahigh: gs.totals.ch,
       caneat: 0, meritlevel: 0, meritscore: game.propCounts(db, acc.uid, pl.server_id)[9994] || 0, warpower: 0, LastActionUpdatePastTime: 0, LastSPUpdatePastTime: 0,
       score: 0, viplevel: vip.level(db, acc.uid, pl.server_id), soul: 0, totalm: 0 };
     return '<root code="0"><user>' + Object.entries(f).map(([k, v]) => el(k, v)).join('') + '</user>' + gs.cards +
       gs.suitlist + '<defensesuitlist></defensesuitlist>' + game.chipbagXml(db, acc.uid, pl.server_id) +
       gs.ninjalist + '<defenseninjalist></defenseninjalist>' +
-      '<chapinfo currentchap="19" currentstage="1"/></root>';
+      `<chapinfo currentchap="${cur.chap}" currentstage="${cur.stage}"/></root>`;
   },
 
   // Gacha status (free pulls / pity counters). Everything available, nothing to track yet.
@@ -398,8 +414,8 @@ module.exports = {
   // Top-up screen header (VIP bar) + first-recharge gift state. Everyone is VIP on this server.
   rl_r_paypack: ({ db, params: p }) => {
     const acc = accountBySession(db, p);
-    const lv = acc ? vip.level(db, acc.uid, Number(p.ServerID || 1)) : 0;
-    return `<root code="0"><payheaplist></payheaplist><maxlv>${vip.MAX_VIP}</maxlv><exp>${lv * 1000}</exp><lvexp>${(lv + 1) * 1000}</lvexp>` +
+    const vp = acc ? vip.progress(db, acc.uid, Number(p.ServerID || 1)) : { lv: 0, exp: 0, lvexp: 10 };
+    return `<root code="0"><payheaplist></payheaplist><maxlv>${vip.MAX_VIP}</maxlv><exp>${vp.exp}</exp><lvexp>${vp.lvexp}</lvexp>` +
       '<canget>1</canget><first_pay>1</first_pay><multiple>1</multiple><servertime>0</servertime><endtime>0</endtime></root>';
   },
   // Top-up packages. Buying is FREE here (the hot-updated ui_purchaseLayer.lua calls rl_x_free_topup instead of Google Play).
@@ -425,7 +441,10 @@ module.exports = {
   rl_w_ky_payorder: ({ db, params: p }) => {
     const acc = accountBySession(db, p);
     const t = TOPUPS.find((x) => x.id === Number(p.ItemId));
-    if (acc && t) db.prepare('UPDATE players SET gold=gold+? WHERE uid=? AND server_id=?').run(t.gold + t.give, acc.uid, Number(p.ServerID || 1));
+    if (acc && t) {
+      db.prepare('UPDATE players SET gold=gold+? WHERE uid=? AND server_id=?').run(t.gold + t.give, acc.uid, Number(p.ServerID || 1));
+      vip.addExp(db, acc.uid, Number(p.ServerID || 1), t.rmb / 10); // cents / 10 = dollars x 10
+    }
     return '<root code="1"></root>';
   },
   rl_x_free_topup: ({ db, params: p }) => {
@@ -435,7 +454,9 @@ module.exports = {
     const t = TOPUPS.find((x) => x.id === Number(p.RechargeId));
     if (!t) return '<root code="5"><message>bad package</message></root>';
     db.prepare('UPDATE players SET gold=gold+? WHERE uid=? AND server_id=?').run(t.gold + t.give, pl.uid, pl.server_id);
-    return '<root code="0">' + game.awardFull({ cash: t.gold + t.give }) + '</root>';
+    vip.addExp(db, pl.uid, pl.server_id, t.rmb / 10); // cents / 10 = dollars x 10
+    // <viplevel>: the hot-updated top-up screen (28.0.9) sets the new level right away
+    return '<root code="0">' + game.awardFull({ cash: t.gold + t.give }) + el('viplevel', vip.level(db, pl.uid, pl.server_id)) + '</root>';
   },
   // Hall of fame: all real players ranked by level.
   rl_r_ninja_rank: ({ db, params: p }) => {
@@ -778,6 +799,24 @@ module.exports = {
   rl_x_breakthrough: (c) => borderCall(c, (db, pl, p) =>
     tearRes(Number(p.Cmd) === 2 ? tupo.breakThrough(db, pl, Number(p.BagIndex)) : tupo.info(db, pl, Number(p.BagIndex)))),
 
+  // Calls the C++ client makes ('/rl_...' strings in libgame.so). rl_r_ninjalist = team refresh after a level-up
+  // (CMyGroupView); an unknown reply there crashed the game.
+  rl_r_ninjalist: (c) => borderCall(c, (db, pl) => {
+    const gs = game.stateXml(db, pl.uid, pl.server_id);
+    return { code: 0, xml: el('activeTeamId', 0) + gs.suitlist + gs.ninjalist + '<defensesuitlist></defensesuitlist><defenseninjalist></defenseninjalist>' };
+  }),
+  rl_r_bagage: (c) => borderCall(c, (db, pl) => ({ code: 0, xml: game.stateXml(db, pl.uid, pl.server_id).cards })),
+  // Campaign chapter/round info (CListLevelView / CRunLevelView, CPlayerDataMgr::InitRoundInfoFromXML), from Training progress.
+  rl_r_adventure: (c) => borderCall(c, (db, pl) => ({ code: 0, xml: game.roundInfoXml(db, pl) })),
+  rl_w_adventure: (c) => borderCall(c, (db, pl) => ({ code: 0, xml: game.roundInfoXml(db, pl) })),
+  rl_w_sportpack: () => '<root code="0"></root>', // arena: cancel cooldown (no cooldowns on this server)
+
+  // Millionaire / Monopoly (monopoly.js, activity 17 on the home screen).
+  rl_r_monopoly_info: (c) => borderCall(c, (db, pl) => ({ code: 0, xml: monopoly.infoXml(db, pl) })),
+  rl_w_monopoly_roll: (c) => borderCall(c, (db, pl, p) => tearRes(monopoly.roll(db, pl, Number(p.Cmd) === 2 ? 10 : 1))),
+  rl_r_monopoly_rank: (c) => borderCall(c, (db, pl) => ({ code: 0, xml: monopoly.rankXml(db, pl) })),
+  rl_w_monopoly_receive: (c) => borderCall(c, (db, pl, p) => { const r = monopoly.receive(db, pl, Number(p.Cmd), Number(p.AwardID)); return r.code ? { code: r.code } : { code: 0, xml: r.xml }; }),
+
   // Pets (pet.js, Base > Pets).
   rl_x_pet: (c) => borderCall(c, (db, pl, p) => {
     const cmd = Number(p.Cmd), id = Number(p.PetID);
@@ -938,7 +977,10 @@ module.exports = {
     if (Number(p.Cmd) === 3) return trainingFight(db, pl0, Number(p.ChapID || 1), Number(p.StageID || 1));
     const cur = game.getStage(db, acc.uid, sid, Number(p.ChapID || 1));
     let stages = '';
-    for (let i = 1; i <= cur; i++) stages += `<stage stageid="${i}" pos="1" pos_time="0" pk_boss_times="0"/>`;
+    for (let i = 1; i <= cur; i++) {
+      const st = game.stageState(db, pl0, Number(p.ChapID || 1), i);
+      stages += `<stage stageid="${i}" pos="1" pos_time="${st.clears}" pk_boss_times="${st.bossLeft}"/>`;
+    }
     return `<root code="0"><preview currentstage="${cur}" laststage="${cur}"/><stagelist>${stages}</stagelist><expbuf addrate="0" exp_time="0"/></root>`;
   },
 
