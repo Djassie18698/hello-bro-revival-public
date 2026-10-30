@@ -12,5 +12,5 @@ and everything under `renlong28/` (build_cdn.py does both). `<updateversion>` is
 
 Shipped so far: 28.0.3 = ui_purchaseLayer.lua (top-up buttons call rl_x_free_topup instead of Google Play).
 28.0.5 = adds config/activity_config.lua (activity id 47 = seven-day goals in the Event menu) and ui_sevenDayView.lua (day counter).
-28.0.6 = adds ui_myBaseLayer.lua (Pets open at level 30, was 150) and ui_petPsychicLayer.lua (helper slots at 1/30/40...90; pet.js SLOT_LV matches).
+28.0.6 = changed pet unlock levels (withdrawn). 28.0.7 = ships the ORIGINAL ui_myBaseLayer.lua / ui_petPsychicLayer.lua so phones that got 28.0.6 are back to level 150 / original slots.
 Note: mainActivity.lua is run by C++ straight from the OBB, so patching it does nothing; files loaded with `require` do pick up patches.

@@ -1,40 +1,50 @@
-// Pets / summoning beasts (Base > Pets, ui_pet*.lua; rl_x_pet). Free play: every player owns all 8 pets from petinfo,
-// plus starter grain (prop 36, levels) and nostrum (prop 37, ranks). Pets open at level 30 (hot update). One master pet and up to 8 helper slots (unlocked
-// at player level 1/30/40/.../90) add stats to the team (master 50%, helpers 15%), see teamBonus.
+// Pets / summoning beasts (Base > Pets, opens at player level 150; ui_pet*.lua; rl_x_pet). As in the original game a pet
+// is earned by collecting 30 of its fragments (sold in the mystery shop) and merging them in the Backpack (rl_w_comm Cmd 10).
+// Grain (prop 36) levels a pet, nostrum (prop 37) ranks it up; both are also mystery shop items. One master pet and up to
+// 8 helper slots (unlocked at player level 1/80/100/.../200); the stats of all working pets are added to the team.
 // Cmds: 1/3 pet list, 2 summon circle, 4 training info, 5 train (Type 1 normal / 2 special), 6 level info, 7 level up,
 // 8 rank info, 9 rank up, 10 put PetID in a free helper slot, 11 make PetID master, 12/13 swap PetID for DstPetID.
 const game = require('./game');
 
 const el = (n, v) => `<${n}>${v}</${n}>`;
-const GRAIN = 36, NOSTRUM = 37, STARTER = 200;
-const MAX_LEVEL = 50, MAX_RANK = 10, MAX_STAR = 5; // the training screen draws 5 stars
-const SLOT_LV = [1, 30, 40, 50, 60, 70, 80, 90]; // same as the 28.0.6 hot update of ui_petPsychicLayer.lua
-const TRAIN = { 1: { cost: 5, exp: 60 }, 2: { cost: 20, exp: 260 } };
+const GRAIN = 36, NOSTRUM = 37;
+const MAX_LEVEL = 50, MAX_RANK = 10, MAX_STAR = 10; // = rows in petupgrade / petupgradeequ / petupgradestar
+const SLOT_LV = [1, 80, 100, 120, 140, 160, 180, 200]; // original unlock levels (ui_petPsychicLayer.lua openLv)
+// Training, from petinfo cols 20-27 (m_pet_gen, gencrit, spe, speexpend, specrit, genexpend, add, cei; order reconstructed):
+// normal = 100 points, 20% crit, cost 30 gold +30 per use up to 150, reset daily; special = 150 points, 50% crit, 100 gold.
+function trainCfg(r) {
+  return { gen: r[20], genCrit: r[21], spe: r[22], speCost: r[23], speCrit: r[24], genCost: r[25], genAdd: r[26], genCap: r[27] };
+}
+const today = () => new Date().toISOString().slice(0, 10);
 
 function ensure(db) {
   db.exec(`CREATE TABLE IF NOT EXISTS pets (id INTEGER PRIMARY KEY AUTOINCREMENT, uid INTEGER, server_id INTEGER, pet_id INTEGER,
-    level INTEGER DEFAULT 1, rank INTEGER DEFAULT 0, star INTEGER DEFAULT 0, train INTEGER DEFAULT 0, slot INTEGER DEFAULT -1)`);
+    level INTEGER DEFAULT 1, rank INTEGER DEFAULT 0, star INTEGER DEFAULT 0, train INTEGER DEFAULT 0, slot INTEGER DEFAULT -1);
+    CREATE TABLE IF NOT EXISTS pet_train (uid INTEGER, server_id INTEGER, day TEXT, n INTEGER DEFAULT 0, PRIMARY KEY(uid, server_id))`);
 }
+// A new pet (from merging its fragments). The first pet becomes the master.
+function addPet(db, uid, sid, petId) {
+  ensure(db);
+  const has = db.prepare('SELECT 1 FROM pets WHERE uid=? AND server_id=? AND slot=0').get(uid, sid);
+  return db.prepare('INSERT INTO pets(uid,server_id,pet_id,slot) VALUES(?,?,?,?)').run(uid, sid, petId, has ? -1 : 0).lastInsertRowid;
+}
+function trainsToday(db, pl) {
+  const r = db.prepare('SELECT * FROM pet_train WHERE uid=? AND server_id=?').get(pl.uid, pl.server_id);
+  return r && r.day === today() ? r.n : 0;
+}
+const normalCost = (c, n) => Math.min(c.genCap, c.genCost + c.genAdd * n);
 function all(db, pl) {
   ensure(db);
-  let rows = db.prepare('SELECT * FROM pets WHERE uid=? AND server_id=? ORDER BY id').all(pl.uid, pl.server_id);
-  if (!rows.length) { // first visit: hand out every pet and some food
-    const ins = db.prepare('INSERT INTO pets(uid,server_id,pet_id,slot) VALUES(?,?,?,?)');
-    game.table('petinfo').rows.forEach((r, i) => ins.run(pl.uid, pl.server_id, r[0], i === 0 ? 0 : -1));
-    game.propAdd(db, pl.uid, pl.server_id, GRAIN, STARTER);
-    game.propAdd(db, pl.uid, pl.server_id, NOSTRUM, STARTER);
-    rows = db.prepare('SELECT * FROM pets WHERE uid=? AND server_id=? ORDER BY id').all(pl.uid, pl.server_id);
-  }
-  return rows;
+  return db.prepare('SELECT * FROM pets WHERE uid=? AND server_id=? ORDER BY id').all(pl.uid, pl.server_id);
 }
 const info = (petId) => game.table('petinfo').rows.find((r) => r[0] === petId);
-// petinfo [9..11] = base attack/defense/chakra; +4% of base per level; petupgradeequ [5..7] = flat bonus at a rank;
+// petinfo [9..11] = base attack/defense/chakra, [13..15] = added per level; petupgradeequ [5..7] = flat bonus at a rank;
 // petupgradestar [3] / 50 = % buff at a star.
 function stats(p) {
   const r = info(p.pet_id) || [];
   const eq = game.table('petupgradeequ').rows.find((x) => x[0] === p.rank);
   const st = game.table('petupgradestar').rows.find((x) => x[0] === p.star);
-  const base = (i) => Math.round((r[i] || 0) * (1 + 0.04 * (p.level - 1))) + (eq ? eq[5 + i - 9] : 0);
+  const base = (i) => (r[i] || 0) + (r[i + 4] || 0) * (p.level - 1) + (eq ? eq[5 + i - 9] : 0);
   const buff = st ? Math.round(st[3] / 50) : 0;
   return { attack: base(9), defense: base(10), chakala: base(11), attack_buff: buff, defense_buff: buff, chakala_buff: buff };
 }
@@ -45,12 +55,13 @@ const one = (db, pl, id) => all(db, pl).find((p) => p.id === id);
 const cnt = (db, pl, prop) => game.propCounts(db, pl.uid, pl.server_id)[prop] || 0;
 
 function listXml(db, pl) { return `<pets>${all(db, pl).map(petXml).join('')}</pets>`; }
-// Stats the pets give the team (also shown on the summon circle).
+// Stats the pets give the team (also shown on the summon circle): the sum of all working pets, which the game
+// spreads evenly over the ninjas.
 function teamBonus(db, uid, sid) {
   ensure(db);
   const t = { attack: 0, defense: 0, chakala: 0 };
   for (const p of db.prepare('SELECT * FROM pets WHERE uid=? AND server_id=? AND slot>=0').all(uid, sid)) {
-    const s = stats(p), f = p.slot === 0 ? 0.5 : 0.15;
+    const s = stats(p), f = 1;
     t.attack += Math.round(s.attack * (1 + s.attack_buff / 100) * f);
     t.defense += Math.round(s.defense * (1 + s.defense_buff / 100) * f);
     t.chakala += Math.round(s.chakala * (1 + s.chakala_buff / 100) * f);
@@ -122,26 +133,28 @@ const starRow = (star) => game.table('petupgradestar').rows.find((r) => r[0] ===
 function trainInfo(db, pl, id) {
   const p = one(db, pl, id);
   if (!p) return { error: 'no such pet' };
-  const row = starRow(p.star);
+  const row = starRow(p.star), c = trainCfg(info(p.pet_id));
   return { xml: '<basic>' + el('star', p.star) + el('max_star', MAX_STAR) + el('current_train', p.train) + el('total_train', row ? row[2] : 0) +
-    el('tain_normal_cost', TRAIN[1].cost) + el('tain_spec_cost', TRAIN[2].cost) + el('tain_normal_gen', TRAIN[1].exp) + el('tain_spec_gen', TRAIN[2].exp) +
+    el('tain_normal_cost', normalCost(c, trainsToday(db, pl))) + el('tain_spec_cost', c.speCost) + el('tain_normal_gen', c.gen) + el('tain_spec_gen', c.spe) +
     '</basic>' + numXml(p, { ...p, star: Math.min(MAX_STAR, p.star + 1) }) };
 }
 function train(db, pl, id, type) {
   const p = one(db, pl, id);
-  const t = TRAIN[type];
-  if (!p || !t) return { error: 'no such pet' };
+  if (!p || (type !== 1 && type !== 2)) return { error: 'no such pet' };
+  const c = trainCfg(info(p.pet_id)), n = trainsToday(db, pl);
+  const t = type === 1 ? { cost: normalCost(c, n), exp: c.gen, crit: c.genCrit } : { cost: c.speCost, exp: c.spe, crit: c.speCrit };
   const row = starRow(p.star);
   if (!row || p.star >= MAX_STAR) return { error: 'max star' };
   const gold = db.prepare('SELECT gold FROM players WHERE uid=? AND server_id=?').get(pl.uid, pl.server_id).gold;
   if (gold < t.cost) return { error: 'not enough gold' };
   db.prepare('UPDATE players SET gold=gold-? WHERE uid=? AND server_id=?').run(t.cost, pl.uid, pl.server_id);
-  const crit = Math.random() < 0.2 ? 1 : 0;
+  if (type === 1) db.prepare('INSERT INTO pet_train VALUES(?,?,?,1) ON CONFLICT DO UPDATE SET n=CASE WHEN day=excluded.day THEN n+1 ELSE 1 END, day=excluded.day').run(pl.uid, pl.server_id, today());
+  const crit = Math.random() * 100 < t.crit ? 1 : 0;
   let exp = p.train + t.exp * (crit ? 2 : 1), star = p.star, up = 0;
   if (exp >= row[2]) { exp -= row[2]; star += 1; up = 1; }
   if (star >= MAX_STAR) exp = 0;
   db.prepare('UPDATE pets SET train=?, star=? WHERE id=?').run(exp, star, id);
-  return { xml: '<basic>' + el('upgrade', up) + el('crit', crit) + el('train', exp) + el('current_cost', t.cost) + el('next_spec_cost', TRAIN[1].cost) + '</basic>' };
+  return { xml: '<basic>' + el('upgrade', up) + el('crit', crit) + el('train', exp) + el('current_cost', t.cost) + el('next_spec_cost', normalCost(c, type === 1 ? n + 1 : n)) + '</basic>' };
 }
 // Master pet id for fight XML (<master_pet><pet_id>), 0 when none.
 function masterPetId(db, uid, sid) {
@@ -150,4 +163,4 @@ function masterPetId(db, uid, sid) {
   return p ? p.pet_id : 0;
 }
 
-module.exports = { listXml, circleXml, place, levelInfo, levelUp, rankInfo, rankUp, trainInfo, train, teamBonus, masterPetId };
+module.exports = { addPet, listXml, circleXml, place, levelInfo, levelUp, rankInfo, rankUp, trainInfo, train, teamBonus, masterPetId };

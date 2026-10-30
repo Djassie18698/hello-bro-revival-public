@@ -1,5 +1,6 @@
 // Breakthrough (Base > Breakthrough, ui_tupoLayer.lua; rl_x_breakthrough). Only god cards (quality 6) can break through:
-// each level costs that card's own fragments (piece_info type 3) plus silver and adds +4% to all its stats (game.ninjaStats).
+// each level costs that card's own fragments (piece_info type 3) plus silver and adds +4% to the stats of the card's element
+// (game.ninjaStats) plus 2% ninjutsu trigger and 1% element restrain shown on screen. Costs are ours: the original numbers are lost.
 // Cmd 1 = info for BagIndex, Cmd 2 = break through one level.
 const game = require('./game');
 

@@ -501,7 +501,7 @@ module.exports = {
     if (cmd === 4) {
       const r = game.secretBuy(db, pl, Number(p.Soul));
       if (r.error) return `<root code="5"><message>${r.error}</message></root>`;
-      return '<root code="0">' + game.awardXml({ ninja: r.ninja, seq: r.seq }) + '</root>';
+      return '<root code="0">' + r.xml + '</root>';
     }
     if (cmd === 5) return '<root code="0"><total_val>0</total_val><card_list></card_list></root>';
     return '<root code="0">' + game.secretXml(db, pl) + '</root>';
@@ -595,6 +595,7 @@ module.exports = {
     const pl = acc && db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(acc.uid, Number(p.ServerID || 1));
     if (!pl) return '<root code="3"><message>session expired</message></root>';
     const wc = Number(p.Cmd);
+    if (wc === 10) { const r = game.mergeChips(db, pl, Number(p.ChipBagID)); return r.error ? `<root code="5"><message>${r.error}</message></root>` : '<root code="0">' + r.xml + '</root>'; }
     if (wc === 24) return '<root code="0">' + slot.bet(db, pl) + '</root>';
     if (wc === 23) { const r = slot.spin(db, pl); return r.error ? `<root code="5"><message>${r.error}</message></root>` : '<root code="0">' + r.xml + '</root>'; }
     if (wc === 25) { const r = slot.exchange(db, pl, Number(p.Id || p.PackageID || p.ID)); return r.error ? `<root code="5"><message>${r.error}</message></root>` : '<root code="0">' + r.xml + '</root>'; }

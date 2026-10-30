@@ -1,5 +1,5 @@
 // Ninja Test (Base > Ninja Test, ui_ninjaTestMain.lua; rl_x_exam). 15 stages, each guarded by 5 ninjas. You pick up to
-// 5 of your 4-star+ ninjas; a fight is a chain of one-on-one duels (attack vs guard value, a little luck) and the loser
+// 5 of your 4 or 5-star ninjas; a fight is a chain of one-on-one duels (attack vs guard value, a little luck) and the loser
 // of each duel is out. Fallen ninjas stay fallen for the day, so a stage may take several tries with fresh ninjas.
 // Clearing a stage gives score (spent in the score shop) and opens a chest; every 5th stage has 3 chests.
 // Cmd 1 info, 2 set team (card_index_list a_b_c), 3 exchange (reward_id), 4 buy a try, 5 fight, 6 open chest (box_index), 7 next stage.
@@ -86,7 +86,7 @@ function setTeam(db, pl, raw) {
   for (const s of seqs) {
     const c = db.prepare('SELECT ninja_id FROM cards WHERE seq=? AND uid=? AND server_id=? AND type=1').get(s, pl.uid, pl.server_id);
     const n = c && game.ninjas().get(c.ninja_id);
-    if (!n || n[11] < 4) return { error: 'only your own 4-star or better ninjas can take the test' };
+    if (!n || n[11] < 4 || n[11] > 5) return { error: 'only 4 or 5-star ninjas can take the test' }; // help text: 4 or 5-star
   }
   save(db, pl, { team: seqs.join('_') });
   return { xml: '' };

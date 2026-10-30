@@ -39,7 +39,7 @@ function ensure(db) {
   try { db.exec('ALTER TABLE players ADD COLUMN vip INTEGER NOT NULL DEFAULT 0'); } catch {}
   try { db.exec('ALTER TABLE players ADD COLUMN vipexp INTEGER NOT NULL DEFAULT 0'); } catch {}
   try { db.exec('ALTER TABLE cards ADD COLUMN newlife INTEGER NOT NULL DEFAULT 0'); } catch (e) { /* already there */ }
-  for (const c of ['pot_att', 'pot_def', 'pot_ckr', 'pend_att', 'pend_def', 'pend_ckr', 'breaklvl']) { try { db.exec(`ALTER TABLE cards ADD COLUMN ${c} INTEGER NOT NULL DEFAULT 0`); } catch (e) { /* already there */ } }
+  for (const c of ['pot_att', 'pot_def', 'pot_ckr', 'pend_att', 'pend_def', 'pend_ckr', 'breaklvl', 'attri']) { try { db.exec(`ALTER TABLE cards ADD COLUMN ${c} INTEGER NOT NULL DEFAULT 0`); } catch (e) { /* already there */ } }
   ready.add(db);
 }
 
@@ -182,6 +182,14 @@ function chipbagXml(db, uid, sid) {
   return '<chipbag>' + Object.entries(propCounts(db, uid, sid)).filter(([id, n]) => id > CHIP_BASE && id < CHIP_BASE + 10000 && n > 0)
     .map(([id, n]) => `<chipitem id="${id - CHIP_BASE}" num="${n}"/>`).join('') + '</chipbag>';
 }
+// Backpack > fragments > Merge (rl_w_comm Cmd 10, ChipBagID = piece_info id): piece [7] fragments become drop [8].
+function mergeChips(db, pl, pieceId) {
+  const r = table('piece_info').rows.find((x) => x[0] === pieceId);
+  if (!r) return { error: 'no such fragment' };
+  if (chipCount(db, pl.uid, pl.server_id, pieceId) < r[7]) return { error: 'not enough fragments' };
+  propAdd(db, pl.uid, pl.server_id, CHIP_BASE + pieceId, -r[7]);
+  return { xml: grantDrop(db, pl, r[8]) };
+}
 function grantDrop(db, pl, dropId) {
   const r = table('dropinfo').rows.find((x) => x[0] === dropId);
   if (!r) return null;
@@ -198,6 +206,7 @@ function grantDrop(db, pl, dropId) {
   else if (r[11] > 0) coin = r[11] * n;
   else if (r[8] > 0) { propAdd(db, pl.uid, pl.server_id, CHIP_BASE + r[8], n); chips = n; }
   else if (r[9] > 0) { soul = r[9] * n; propAdd(db, pl.uid, pl.server_id, SOUL, soul); }
+  else if (r[14] > 0) for (let i = 0; i < n; i++) require('./pet').addPet(db, pl.uid, pl.server_id, r[14]); // pet (shown in the pet screens)
   else if (r[5] > 0 || r[6] > 0) coin = 20000 * n; // ninjutsu / seal cards are not modelled yet
   if (coin || cash) db.prepare('UPDATE players SET coin=coin+?, gold=gold+? WHERE uid=? AND server_id=?').run(coin, cash, pl.uid, pl.server_id);
   const cardXml = cards.map((c) => '<card>' + el('id', c.id) + el('type', c.type) + el('num', 1) + el('attri', 0) + el('bagIndex', c.seq) + el('level', 1) + el('newlife', 0) + el('starlevel', 0) + '</card>').join('');
@@ -521,26 +530,42 @@ function soulOf(db, pl) {
   if (c[SOUL] === undefined) { propAdd(db, pl.uid, pl.server_id, SOUL, 30000); return 30000; } // starter souls for the offline server
   return c[SOUL];
 }
+// Mystery shop (secret_shop rows: [id, id, name, type, subtype, itemid, num, costtype, cost, weight, dropid]): 6 rows a day
+// picked by weight from everything the original sold - ninjas, ninja fragments, pet fragments, grain, nostrum, sage stones,
+// reincarnation pills. Each row can be bought once per day.
 function secretPicks(pl) {
-  const rows = table('secret_shop').rows.filter((r) => ninjas().has(r[5]));
+  // rows 233-241 are untranslated duplicates from the Chinese server
+  const rows = table('secret_shop').rows.filter((r) => r[9] > 0 && r[10] > 0 && /^[ -~]*$/.test(r[2]));
   const day = Math.floor(Date.now() / 86400000), picks = [];
   let seed = (pl.uid * 31 + day + (pl.shopseed || 0)) >>> 0;
   const rnd = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296;
-  while (picks.length < 6 && picks.length < rows.length) { const r = rows[Math.floor(rnd() * rows.length)]; if (!picks.includes(r)) picks.push(r); }
+  const total = rows.reduce((a, r) => a + r[9], 0);
+  for (let guard = 0; picks.length < 6 && guard < 500; guard++) {
+    let x = rnd() * total;
+    const r = rows.find((q) => (x -= q[9]) < 0) || rows[rows.length - 1];
+    if (!picks.includes(r)) picks.push(r);
+  }
   return picks;
 }
+function secretBought(db, pl) {
+  db.exec('CREATE TABLE IF NOT EXISTS secret_bought (uid INTEGER, server_id INTEGER, day INTEGER, row INTEGER, PRIMARY KEY(uid, server_id, day, row))');
+  const day = Math.floor(Date.now() / 86400000);
+  return new Set(db.prepare('SELECT row FROM secret_bought WHERE uid=? AND server_id=? AND day=?').all(pl.uid, pl.server_id, day).map((r) => r.row));
+}
 function secretXml(db, pl) {
-  const soul = soulOf(db, pl);
-  const cards = secretPicks(pl).map((r) => { const n = ninjas().get(r[5]); return `<item><card>${el('id', r[0])}${el('type', 1)}${el('subtype', 1)}${el('name', String(n[2]).replace(/[<>&]/g, ''))}${el('icon', r[5])}${el('num', 1)}${el('cost', r[8])}${el('costtype', 1)}${el('status', 0)}${el('itemid', r[5])}${el('attacktype', 0)}</card></item>`; }).join('');
-  return `<user>${el('cursoul', soul)}${el('updatenum', 99)}${el('gold', pl.gold)}${el('refreshcost', 0)}${el('totalrefresh', 99)}${el('dayrefreshleft', 99)}${el('lefttime', 86400)}</user><cardlist>${cards}</cardlist>`;
+  const soul = soulOf(db, pl), bought = secretBought(db, pl);
+  const esc = (t) => String(t).replace(/[<>&]/g, '');
+  const cards = secretPicks(pl).map((r) => `<item><card>${el('id', r[0])}${el('type', r[3])}${el('subtype', r[4])}${el('name', esc(r[2]))}${el('icon', r[5])}${el('num', r[6])}${el('cost', r[8])}${el('costtype', r[7])}${el('status', bought.has(r[0]) ? 1 : 0)}${el('itemid', r[5])}${el('attacktype', 0)}</card></item>`).join('');
+  return `<user>${el('cursoul', soul)}${el('updatenum', 99)}${el('gold', pl.gold)}${el('refreshcost', 0)}${el('totalrefresh', 99)}${el('dayrefreshleft', 99)}${el('lefttime', 86400 - Math.floor(Date.now() / 1000) % 86400)}</user><cardlist>${cards}</cardlist>`;
 }
 function secretBuy(db, pl, rowId) {
   const r = secretPicks(pl).find((x) => x[0] === rowId);
   if (!r) return { error: 'not in shop' };
-  if (soulOf(db, pl) < r[8]) return { error: 'not enough souls' };
-  propAdd(db, pl.uid, pl.server_id, SOUL, -r[8]);
-  const seq = giveCard(db, pl.uid, pl.server_id, r[5]);
-  return { ninja: r[5], seq };
+  if (secretBought(db, pl).has(r[0])) return { error: 'already bought today' };
+  if (r[7] === 1) { if (soulOf(db, pl) < r[8]) return { error: 'not enough souls' }; propAdd(db, pl.uid, pl.server_id, SOUL, -r[8]); }
+  else { if (pl.gold < r[8]) return { error: 'not enough gold' }; db.prepare('UPDATE players SET gold=gold-? WHERE uid=? AND server_id=?').run(r[8], pl.uid, pl.server_id); }
+  db.prepare('INSERT INTO secret_bought VALUES(?,?,?,?)').run(pl.uid, pl.server_id, Math.floor(Date.now() / 86400000), r[0]);
+  return { xml: grantDrop(db, pl, r[10]) };
 }
 
 // ---- Stats: ninja level growth + gear + set bonuses ------------------------------------------
@@ -549,8 +574,12 @@ const KEYS = ['al', 'ah', 'dl', 'dh', 'cl', 'ch'];
 function ninjaStats(card) {
   const n = ninjas().get(card.ninja_id);
   const o = {};
-  const mult = 1 + 0.05 * (card.starlevel || 0) + 0.1 * (card.newlife || 0) + 0.04 * (card.breaklvl || 0); // sage growth +5% per level, reincarnation +10% per grade, breakthrough +4% per level
-  KEYS.forEach((k, i) => { o[k] = n ? Math.round(((n[19 + i] || 0) + (n[25 + i] || 0) * (card.level - 1)) * mult) : 0; });
+  const mult = 1 + 0.05 * (card.starlevel || 0) + 0.1 * (card.newlife || 0); // sage growth +5% per level, reincarnation +10% per grade
+  // god breakthrough: +4% per level, only on the stats of the card's element (ui_tupo_desc): fire ATK+chakra, water chakra,
+  // wind DEF+chakra, earth DEF, thunder ATK. Element = cards.attri (1 water, 2 fire, 3 wind, 4 earth, 5 thunder; 0 shows as water).
+  const BREAK = { 1: 'c', 2: 'ac', 3: 'dc', 4: 'd', 5: 'a' }[card.attri || 1] || 'c';
+  const bk = (k) => (BREAK.includes(k[0]) ? 0.04 * (card.breaklvl || 0) : 0);
+  KEYS.forEach((k, i) => { o[k] = n ? Math.round(((n[19 + i] || 0) + (n[25 + i] || 0) * (card.level - 1)) * (mult + bk(k))) : 0; });
   const pot = [card.pot_att, card.pot_att, card.pot_def, card.pot_def, card.pot_ckr, card.pot_ckr];
   KEYS.forEach((k, i) => { o[k] += pot[i] || 0; });
   return o;
@@ -772,4 +801,4 @@ function godSynth(db, pl, attSeq, defSeq) {
   return { ninja: god, seq: giveCard(db, pl.uid, pl.server_id, god) };
 }
 
-module.exports = { grantDrop, mergeAwards, ninjaStats, CHIP_BASE, chipCount, chipbagXml, godSynth, potentialXml, potentialRoll, potentialSave, newlife, NEWLIFE_MAX, NEWLIFE_COST, arenaListXml, arenaRankXml, arenaFight, gateXml, gateOpen, gateLevel, gateBonus, friendsXml, sageGrow, giveEquip, teamStats, awardXml, secretXml, secretBuy, soulOf, equip, strengthen, packBuy, propUse, propCounts, propAdd, shopBuy, actXml, actClaim, sparFight, rivalsXml, rivals, bumpTask, dailyXml, dailyClaim, awardFull, addExp, battleXml, getStage, setStage, pull, pullXml, table, ninjas, ensure, giveCard, ensureStarterTeam, stateXml, cardXml };
+module.exports = { grantDrop, mergeChips, mergeAwards, ninjaStats, CHIP_BASE, chipCount, chipbagXml, godSynth, potentialXml, potentialRoll, potentialSave, newlife, NEWLIFE_MAX, NEWLIFE_COST, arenaListXml, arenaRankXml, arenaFight, gateXml, gateOpen, gateLevel, gateBonus, friendsXml, sageGrow, giveEquip, teamStats, awardXml, secretXml, secretBuy, soulOf, equip, strengthen, packBuy, propUse, propCounts, propAdd, shopBuy, actXml, actClaim, sparFight, rivalsXml, rivals, bumpTask, dailyXml, dailyClaim, awardFull, addExp, battleXml, getStage, setStage, pull, pullXml, table, ninjas, ensure, giveCard, ensureStarterTeam, stateXml, cardXml };
