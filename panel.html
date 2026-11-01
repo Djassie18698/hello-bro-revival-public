@@ -32,6 +32,24 @@ nav a.on{color:#1a0f02;background:linear-gradient(135deg,var(--orange2),var(--or
 main{position:absolute;top:83px;left:0;right:0;bottom:0}
 iframe{position:absolute;inset:0;width:100%;height:100%;border:0;background:transparent;display:none}
 iframe.on{display:block}
+#progress{position:absolute;inset:0;overflow:auto;display:none;padding:24px 20px 60px}
+#progress.on{display:block}
+.prog{max-width:1100px;margin:0 auto}
+.prog h1{font-size:40px;margin:0 0 6px}
+.prog h2{font-family:Bangers,Impact,sans-serif;letter-spacing:1.5px;font-size:28px;margin:28px 0 10px;color:var(--orange2)}
+.prog p{color:var(--muted);font-size:14px;line-height:1.6}
+.prog a{color:#7dd3fc}
+.prog table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden;font-size:14px;backdrop-filter:blur(14px)}
+.prog th,.prog td{padding:10px 12px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+.prog th{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:1px;background:rgba(255,255,255,.03)}
+.prog table.st td:first-child{width:34px;font-size:18px;text-align:center}
+.prog tr:hover td{background:rgba(255,255,255,.03)}
+.bars{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px;margin:16px 0}
+.bar{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px}
+.bar b{display:block;font-size:15px;margin-bottom:8px}
+.track{height:10px;border-radius:999px;background:rgba(255,255,255,.08);overflow:hidden;display:flex}
+.track i{display:block;height:100%}
+.bar small{display:block;color:var(--muted);font-size:12px;margin-top:6px}
 @media(max-width:800px){main{top:150px}nav{margin-left:0}h1{font-size:28px}}
 </style>
 </head>
@@ -44,6 +62,7 @@ iframe.on{display:block}
     <a data-t="server">🖥️ Server</a>
     <a data-t="admin">🎁 Players &amp; items</a>
     <a data-t="team">🛡️ Team builder</a>
+    <a data-t="progress">📋 Progress</a>
   </nav>
   <div class="right">
     <a class="pill" href="https://discord.gg/2Cbp4UDHrU" target="_blank">💬 Discord</a>
@@ -53,14 +72,24 @@ iframe.on{display:block}
 <main>
   <iframe id="f-server" title="Server" allowtransparency="true"></iframe>
   <iframe id="f-admin" title="Players and items" allowtransparency="true"></iframe>
+  <div id="progress"><div class="prog" id="prog">Loading…</div></div>
 </main>
 <script>
 // One site, three tabs. The Server Manager and the admin page load once (embedded, without their own headers) and stay loaded,
 // so switching tabs keeps your place. "Team builder" is the admin page's Team editor tab.
 const frames = { server: document.getElementById('f-server'), admin: document.getElementById('f-admin') };
-const src = { server: '/manager?embed=1', admin: '/admin?embed=1' };
+const v = Date.now(); // never reuse an old cached copy after an update
+const src = { server: '/manager?embed=1&v=' + v, admin: '/admin?embed=1&v=' + v };
 function show(t) {
-  if (!['server', 'admin', 'team'].includes(t)) t = 'server';
+  if (!['server', 'admin', 'team', 'progress'].includes(t)) t = 'server';
+  document.getElementById('progress').classList.toggle('on', t === 'progress');
+  if (t === 'progress') {
+    for (const k in frames) frames[k].classList.remove('on');
+    document.querySelectorAll('nav a').forEach((a) => a.classList.toggle('on', a.dataset.t === t));
+    loadProgress();
+    if (location.hash !== '#progress') history.replaceState(null, '', '#progress');
+    return;
+  }
   const f = t === 'server' ? 'server' : 'admin';
   if (!frames[f].src) frames[f].src = src[f];
   for (const k in frames) frames[k].classList.toggle('on', k === f);
@@ -71,6 +100,43 @@ function show(t) {
     if (frames.admin.dataset.ready) go(); else frames.admin.onload = () => { frames.admin.dataset.ready = 1; go(); };
   }
   if (location.hash !== '#' + t) history.replaceState(null, '', '#' + t);
+}
+// Progress tab: docs/PROGRESS.md (the same page as on GitHub), drawn with a tiny Markdown reader (headings, tables, bold, links)
+const escH = (s) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const inline = (s) => escH(s).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/`(.+?)`/g, '<code>$1</code>').replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
+function md(text) {
+  const out = [], lines = text.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    if (/^\|/.test(l)) {
+      const rows = [];
+      while (i < lines.length && /^\|/.test(lines[i])) rows.push(lines[i++]);
+      i--;
+      const cells = (r) => r.replace(/^\||\|$/g, '').split('|').map((c) => c.trim());
+      out.push('<table class="' + (cells(rows[0])[0] ? '' : 'st') + '"><tr>' + cells(rows[0]).map((c) => '<th>' + inline(c) + '</th>').join('') + '</tr>' +
+        rows.slice(2).map((r) => '<tr>' + cells(r).map((c) => '<td>' + inline(c) + '</td>').join('') + '</tr>').join('') + '</table>');
+    } else if (/^# /.test(l)) out.push('<h1>' + inline(l.slice(2)) + '</h1>');
+    else if (/^## /.test(l)) out.push('<h2>' + inline(l.slice(3)) + '</h2>');
+    else if (l.trim()) out.push('<p>' + inline(l) + '</p>');
+  }
+  return out.join('');
+}
+function bars(text) { // one progress bar per bug list from the status icons
+  const parts = text.split(/^## /m).slice(1).filter((s) => /^Bug list/.test(s));
+  return '<div class="bars">' + parts.map((s) => {
+    const name = s.split('\n')[0], c = (e) => (s.match(new RegExp('^\\| ' + e, 'gm')) || []).length;
+    const ok = c('✅'), test = c('🧪'), todo = c('⏳'), no = c('🚫'), all = ok + test + todo + no || 1;
+    const seg = (n, col) => '<i style="width:' + (100 * n / all) + '%;background:' + col + '"></i>';
+    return '<div class="bar"><b>' + escH(name) + '</b><div class="track">' + seg(ok, '#34d399') + seg(test, '#fbbf24') + seg(todo, '#f87171') + seg(no, '#6b7280') + '</div>' +
+      '<small>' + ok + ' fixed · ' + test + ' to confirm · ' + todo + ' to do · ' + no + ' not possible</small></div>';
+  }).join('') + '</div>';
+}
+async function loadProgress() {
+  try {
+    const t = await (await fetch('/progress.md', { cache: 'no-store' })).text();
+    const html = md(t);
+    document.getElementById('prog').innerHTML = html.replace(/<h2>Summary<\/h2><table[\s\S]*?<\/table>/, '<h2>Summary</h2>' + bars(t)); // the bars replace the summary table
+  } catch { document.getElementById('prog').textContent = 'Could not load the progress page.'; }
 }
 document.querySelector('nav').onclick = (e) => { const a = e.target.closest('a'); if (a) show(a.dataset.t); };
 window.addEventListener('message', (e) => { if (e.origin === location.origin && e.data && e.data.goto) show(e.data.goto); });

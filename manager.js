@@ -33,7 +33,7 @@ function backups() {
 
 function status(db, port) {
   const nick = db.prepare('SELECT nick, level FROM players WHERE uid=? ORDER BY level DESC LIMIT 1');
-  const online = settings.online().map((o) => ({ ...o, ...(nick.get(o.uid) || { nick: 'uid ' + o.uid, level: 0 }) })).sort((a, b) => b.at - a.at);
+  const online = settings.online().filter((o) => nick.get(o.uid)).map((o) => ({ ...o, ...nick.get(o.uid) })).sort((a, b) => b.at - a.at); // only real characters (start-up requests use placeholder ids)
   const one = (sql) => { try { return db.prepare(sql).get().n; } catch { return 0; } };
   let size = 0;
   try { size = fs.statSync(dbFile()).size; } catch {}
@@ -41,7 +41,7 @@ function status(db, port) {
     now: Date.now(), started: settings.started, port, version: version(), node: process.version, pid: process.pid,
     memory: process.memoryUsage().rss, requests: settings.stats().requests, restartable: process.env.HB_MANAGED === '1',
     players: one('SELECT COUNT(*) n FROM players'), accounts: one('SELECT COUNT(*) n FROM accounts'), groups: one('SELECT COUNT(*) n FROM groups'),
-    online, addresses: addresses(port), dbSize: size, backups: backups().slice(0, 8),
+    online, addresses: addresses(port), dbSize: size, backups: backups().slice(0, 8), db: require('./db').status(), cards: one('SELECT COUNT(*) n FROM cards'),
     events: settings.EVENTS.map((e) => ({ ...e, on: settings.eventOn(db, e.id) })),
     news: settings.news(db), banner: settings.banner(db),
   };

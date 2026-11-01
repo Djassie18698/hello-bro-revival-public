@@ -139,6 +139,8 @@ tr:hover td{background:rgba(255,255,255,.03)}
 .tline input{padding:7px 6px;border-radius:10px;border:1px solid var(--line);background:rgba(0,0,0,.3);color:var(--text);font-size:12px;min-width:0;width:100%}
 .tline input:focus{border-color:var(--orange);outline:none}
 .thead{display:grid;grid-template-columns:58px 1fr 46px 40px 40px;gap:6px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px}
+.bench{border:1px solid var(--line);border-radius:16px;padding:14px;margin:6px 0 16px;background:rgba(0,0,0,.18)}
+.bbar{height:8px;border-radius:999px;background:rgba(255,255,255,.08);overflow:hidden}.bbar i{display:block;height:100%;background:linear-gradient(90deg,#f87171,#fbbf24,#34d399)}
 .danger-box{border:1px solid rgba(225,29,72,.45);background:linear-gradient(135deg,rgba(225,29,72,.14),rgba(225,29,72,.03));border-radius:16px;padding:20px}
 
 #toasts{position:fixed;right:20px;bottom:20px;display:flex;flex-direction:column;gap:10px;z-index:9}
@@ -201,6 +203,10 @@ html.embed .wrap{padding-top:18px}
           <input type="number" id="amount" value="10000" style="width:150px">
           <button class="btn" onclick="give($('field').value, +$('amount').value)">Apply</button>
         </div>
+        <div class="note" style="margin-top:18px;justify-content:space-between;align-items:center">
+          <div>🔓 <b>Unlock everything</b>: top player level, every training chapter and stage cleared, every team slot open, all Battles rounds cleared.</div>
+          <button class="btn purple" onclick="unlockAll()">Unlock everything</button>
+        </div>
       </section>
 
       <section class="panel view" id="v-give">
@@ -248,10 +254,20 @@ html.embed .wrap{padding-top:18px}
           <div><h3>Team editor</h3>
             <p class="hint" style="margin:0">Pick every ninja and every piece of gear, set levels, then press <b>Apply team</b> once. Type in a box to search:
               <b>★ owned</b> cards come first, <b>＋ New</b> ones are created for the player. Leave a box empty for nothing.</p></div>
-          <div class="row"><span class="tag" id="tpower">⚔️ -</span><button class="btn ghost sm" onclick="maxAll()">Everything max</button>
+          <div class="row"><span class="tag" id="tpower">⚔️ -</span><button class="btn purple sm" onclick="completeChains()">🔗 Complete chains</button>
+            <button class="btn purple sm" onclick="bestGear('owned')" title="Best gear from what this player owns">⚔️ Best gear (owned)</button>
+            <button class="btn purple sm" onclick="bestGear('best')" title="Best gear in the game, new cards are made where needed">💎 Best gear (all)</button>
+            <button class="btn ghost sm" onclick="maxAll()">Everything max</button>
             <button class="btn ghost sm" onclick="loadTeam()">Reload</button><button class="btn" onclick="applyTeam()">✅ Apply team</button></div>
         </div>
         <p class="hint" id="tinfo"></p>
+        <div class="bench">
+          <div class="row" style="justify-content:space-between;margin-bottom:8px"><b>⚔️ Benchmark</b>
+            <div class="row"><input class="in" id="btargets" value="100k, 500k, 1m, 2m, 4m, 8m" style="width:260px" title="enemy team defence, comma separated (k = thousand, m = million)">
+            <button class="btn sm" onclick="runBench()">Run</button></div></div>
+          <p class="hint" style="margin:0 0 8px">This team against enemy teams with that total defence, each fought 300 times with the server's fight rules (luck and ninjutsu included). Apply team first.</p>
+          <div id="bres"></div>
+        </div>
         <div class="tgrid" id="tgrid"></div>
         <div id="tlists"></div>
       </section>
@@ -289,24 +305,24 @@ let players = [], sel = null, cat = '', stars = 0, inv = { cards: [], props: [] 
 async function loadPlayers() {
   players = await api('players');
   const first = !sel && players.length;
-  if (first) sel = players[0].uid;
+  if (first) sel = players[0].key;
   renderPlayers(); renderHero();
   if (first && $('v-team').classList.contains('on')) loadTeam();
 }
 function renderPlayers() {
   const q = $('pq').value.toLowerCase();
   const list = players.filter((p) => !q || (p.nick + ' ' + p.uid).toLowerCase().includes(q));
-  $('plist').innerHTML = list.map((p) => '<div class="pcard' + (p.uid === sel ? ' on' : '') + '" onclick="pick(' + p.uid + ')">' + avatar(p) +
+  $('plist').innerHTML = list.map((p) => '<div class="pcard' + (p.key === sel ? ' on' : '') + '" data-key="' + p.key + '" onclick="pick(this.dataset.key)">' + avatar(p) +
     '<div style="min-width:0"><div class="pname">' + esc(p.nick) + (p.vip ? '<span class="vip">VIP ' + p.vip + '</span>' : '') + '</div>' +
-    '<div class="pmeta">Lv ' + p.level + ' · ' + fmt(p.gold) + ' gold · #' + p.uid + '</div></div></div>').join('') || '<div class="empty">No players yet</div>';
+    '<div class="pmeta">Lv ' + p.level + ' · ' + fmt(p.gold) + ' gold · #' + p.uid + (p.server_id > 1 ? ' · starter slot ' + (p.server_id - 1) : '') + '</div></div></div>').join('') || '<div class="empty">No players yet</div>';
 }
 function pick(uid) { sel = uid; renderPlayers(); renderHero(); if ($('v-inv').classList.contains('on')) loadInv(); if ($('v-team').classList.contains('on')) loadTeam(); }
-function current() { return players.find((p) => p.uid === sel); }
+function current() { return players.find((p) => p.key === sel); }
 function renderHero() {
   const p = current();
   if (!p) { $('hero').innerHTML = '<div class="empty">Nobody has made a character on this server yet.</div>'; return; }
   const s = (k, v) => '<div class="stat"><span>' + k + '</span><b>' + v + '</b></div>';
-  $('hero').innerHTML = '<div class="who">' + avatar(p) + '<div><h2>' + esc(p.nick) + '</h2><div class="pmeta">Player #' + p.uid + ' · server ' + p.server_id + '</div></div></div>' +
+  $('hero').innerHTML = '<div class="who">' + avatar(p) + '<div><h2>' + esc(p.nick) + '</h2><div class="pmeta">Player #' + p.uid + ' · ' + (p.server_id > 1 ? 'starter slot ' + (p.server_id - 1) : 'main character') + '</div></div></div>' +
     '<div class="stats">' + s('Level', p.level) + s('VIP', p.vip) + s('Gold', fmt(p.gold)) + s('Silver', fmt(p.coin)) + s('Energy', fmt(p.energy)) + s('Cards', fmt(p.cards)) + '</div>' +
     '<div class="note">💡 <div><b>New cards, equipment and pets only show after the game is closed completely</b> (swipe it away in the recent-apps list) and opened again. The game reads your cards only when it starts.</div></div>';
 }
@@ -314,6 +330,11 @@ function renderHero() {
 const QUICK = [['💰', 'gold', 1000, '+1,000 gold'], ['💰', 'gold', 10000, '+10,000 gold'], ['🪙', 'coin', 100000, '+100,000 silver'], ['🪙', 'coin', 1000000, '+1,000,000 silver'],
   ['⚡', 'energy', 100, '+100 energy'], ['👻', 'souls', 10000, '+10,000 souls'], ['👑', 'vip', 10, 'Set VIP 10'], ['⭐', 'level', 60, 'Set level 60']];
 $('quick').innerHTML = QUICK.map(([e, f, a, t]) => '<button class="qb" onclick="give(\'' + f + '\',' + a + ')"><div class="e">' + e + '</div><b>' + t + '</b><small>one click</small></button>').join('');
+async function unlockAll() {
+  if (!sel || !confirm('Unlock everything for ' + current().nick + '? This cannot be undone (a backup is made at every server start).')) return;
+  const r = await api('unlockall', { uid: sel });
+  toast(r.ok ? 'Unlocked: level ' + r.level + ', ' + r.slots + ' team slots<br><small>Close the game completely and open it again.</small>' : r.error, r.ok); loadPlayers();
+}
 async function give(field, amount) {
   if (!sel) return toast('Pick a player first', false);
   const r = await api('give', { uid: sel, field, amount });
@@ -445,6 +466,40 @@ async function applyTeam() {
   const r = await api('setteam', { uid: sel, slots });
   if (!r.ok) return toast(esc(r.error), false);
   toast('Team applied!<br><small>⚔️ ' + r.power.attack + ' · 🛡️ ' + r.power.defense + '<br>Close the game completely and open it again to see it.</small>');
+  loadTeam(); loadPlayers();
+}
+const num = (s) => { const m = /^\s*([\d.]+)\s*([km]?)\s*$/i.exec(s); return m ? Number(m[1]) * ({ k: 1e3, m: 1e6 }[m[2].toLowerCase()] || 1) : 0; };
+const short = (n) => n >= 1e6 ? (n / 1e6).toFixed(n % 1e6 ? 1 : 0) + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'K' : String(Math.round(n));
+async function runBench() {
+  if (!sel) return;
+  const targets = $('btargets').value.split(',').map(num).filter((x) => x > 0);
+  const r = await api('bench', { uid: sel, targets });
+  if (!r.ok) return toast(esc(r.error || 'failed'), false);
+  $('bres').innerHTML = '<p class="hint" style="margin:0 0 8px">Team attack: <b>' + short(r.minAtk) + ' – ' + short(r.maxAtk) + '</b> (' + r.team.length + ' ninjas, ' +
+    r.team.reduce((t, m) => t + m.jutsu, 0) + ' ninjutsu)</p><table><tr><th>Enemy defence</th><th>Win chance</th><th></th><th>Ninjas used</th><th>In the story</th></tr>' +
+    r.results.map((x) => '<tr><td><b>' + short(x.def) + '</b></td><td>' + x.win + '%</td><td style="width:30%"><div class="bbar"><i style="width:' + x.win + '%"></i></div></td><td>' +
+      (x.win ? x.ninjas : '-') + '</td><td>' + esc(x.where) + '</td></tr>').join('') + '</table>';
+}
+async function bestGear(mode) {
+  if (!sel) return;
+  const r = await api('gearplan', { uid: sel, mode });
+  if (!r.ok) return toast(esc(r.error || 'failed'), false);
+  if (!r.changes.length) return toast('This team already wears the best gear ' + (mode === 'owned' ? 'the player owns' : 'there is') + ' 👌');
+  if (!confirm('Change the gear? This will:\n\n' + r.changes.join('\n') + (mode === 'best' ? '\n\nNew gear arrives at level 50 (equipment rebirth 3).' : ''))) return;
+  const a = await api('setteam', { uid: sel, slots: r.plan });
+  if (!a.ok) return toast(esc(a.error), false);
+  toast('Gear updated!<br><small>⚔️ ' + a.power.attack + ' · 🛡️ ' + a.power.defense + '<br>Close the game completely and open it again.</small>');
+  loadTeam(); loadPlayers();
+}
+async function completeChains() {
+  if (!sel) return;
+  const r = await api('chainplan', { uid: sel });
+  if (!r.ok) return toast(esc(r.error || 'failed'), false);
+  if (!r.changes.length) return toast('Every chain of this team is already active 👌');
+  if (!confirm('Complete the chains? This will:\n\n' + r.changes.join('\n') + '\n\nNew cards arrive at level 50.')) return;
+  const a = await api('setteam', { uid: sel, slots: r.plan });
+  if (!a.ok) return toast(esc(a.error), false);
+  toast('Chains completed!<br><small>⚔️ ' + a.power.attack + ' · 🛡️ ' + a.power.defense + '<br>Close the game completely and open it again.</small>');
   loadTeam(); loadPlayers();
 }
 function maxAll() {

@@ -56,6 +56,7 @@ function attack(db, pl) {
   const coin = win ? 3000 : 500;
   db.prepare('UPDATE players SET coin=coin+? WHERE uid=? AND server_id=?').run(coin, pl.uid, pl.server_id);
   const fight = game.battleXml(db, pl, 1, 1, { win, enemyName: foe ? foe.nick : 'Country Guard', enemyUid: foe ? foe.uid : 0, enemyLevel: foe ? foe.level : pl.level });
+  game.bumpTask(db, pl.uid, pl.server_id, 10); // daily task: join today's war
   // CWarInfoView reads only batter= from <CountryWar>; InitFromXML takes the ROOT, so userinfo/fight/award are root children.
   return { xml: `<CountryWar batter="${win ? 1 : 0}"/><userinfo><LastSPUpdatePastTime>0</LastSPUpdatePastTime></userinfo>${fight}${game.awardFull({ coin })}` };
 }

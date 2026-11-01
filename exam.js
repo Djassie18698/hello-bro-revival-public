@@ -47,11 +47,24 @@ const list = (s) => (s ? s.split('_').map(Number).filter((n) => n > 0) : []);
 
 // Odd stages: the guards defend (you attack). Even stages: the guards attack (your defense counts).
 const guardsAttack = (grade) => (grade % 2 === 0 ? 1 : 0);
-function guards(grade) {
+// Guard value from five Facebook photos of the original (FINDINGS.md). Players of level 270-300 meet stage 1 ~1160, stage 2 ~1950,
+// stage 4 ~2980, stage 14 ~10 065 (straight lines between, +708 a stage after 14); a level 61 player met only ~480 at stage 14, so
+// lower levels get (level / 280)^2 of that (10 065 x 0.047 = 480). Minimum 50 (ours).
+const GUARD_SEEN = [[1, 1160], [2, 1950], [4, 2980], [14, 10065]];
+function guardBase(grade, level) {
+  const k = GUARD_SEEN.findIndex(([g]) => g >= grade);
+  let v;
+  if (k === 0) v = GUARD_SEEN[0][1];
+  else if (k < 0) { const [g, x] = GUARD_SEEN[GUARD_SEEN.length - 1]; v = x + (grade - g) * 708; }
+  else { const [g0, v0] = GUARD_SEEN[k - 1], [g1, v1] = GUARD_SEEN[k]; v = v0 + ((v1 - v0) * (grade - g0)) / (g1 - g0); }
+  return Math.max(50, v * Math.min(1, (level / 280) ** 2));
+}
+function guards(grade, level) {
   const pool = [...game.ninjas().values()].filter((n) => n[11] >= 4 && n[11] <= 5).sort((a, b) => a[0] - b[0]);
   return Array.from({ length: 5 }, (_, i) => {
     const n = pool[(grade * 7 + i * 13) % pool.length];
-    return { id: n[0], name: n[2], attr: n[5] || 1, val: Math.round(380 + grade * 140 + i * 35 + (grade % 5 === 0 ? 300 : 0)) };
+    // bosses at stages 5/10/15 +30% (ours)
+    return { id: n[0], name: n[2], attr: n[5] || 1, val: Math.round((guardBase(grade, level) + i * 5) * (grade % 5 === 0 ? 1.3 : 1)) };
   });
 }
 // My card's value as the client shows it: average attack (or defense when the guards attack).
@@ -63,7 +76,7 @@ function cardVal(db, pl, seq, defend) {
 }
 function infoXml(db, pl) {
   const e = me(db, pl);
-  const g = guards(e.grade), gdead = list(e.gdead);
+  const g = guards(e.grade, pl.level), gdead = list(e.gdead);
   const opp = g.map((x, i) => '<item><ninja_member>' + el('ninja_id', x.id) + el('val', x.val) + el('cardattr', x.attr) +
     el('dead_flag', gdead.includes(i + 1) ? 1 : 0) + '</ninja_member></item>').join('');
   const idx = (arr) => arr.map((b) => `<item>${el('bag_index', b)}</item>`).join('');
@@ -107,7 +120,7 @@ function fight(db, pl) {
   const defend = guardsAttack(e.grade) === 1;
   const mine = list(e.team).filter((s) => !dead.includes(s)).map((s) => ({ seq: s, val: cardVal(db, pl, s, defend) })).filter((x) => x.val > 0);
   if (!mine.length) return { error: 'pick ninjas that are still standing' };
-  const g = guards(e.grade).map((x, i) => ({ ...x, slot: i + 1 })).filter((x) => !gdead.includes(x.slot));
+  const g = guards(e.grade, pl.level).map((x, i) => ({ ...x, slot: i + 1 })).filter((x) => !gdead.includes(x.slot));
   let a = 0, b = 0;
   const hp = mine.map((m) => m.val), ghp = g.map((x) => x.val);
   while (a < mine.length && b < g.length) { // duel: the stronger (with luck) survives, weakened by the loser's value
@@ -117,7 +130,7 @@ function fight(db, pl) {
   const win = b >= g.length;
   const score = win ? 10 * e.grade + (e.grade % 5 === 0 ? 30 : 0) : 0;
   save(db, pl, { left_count: e.left_count - 1, dead: dead.join('_'), gdead: gdead.join('_'), is_win: win ? 1 : 0, score: e.score + score });
-  const fightXml = game.battleXml(db, pl, 1, e.grade, { win, enemyIds: g.map((x) => x.id), enemyName: guards(e.grade)[0].name, enemyLevel: 10 + e.grade * 4 });
+  const fightXml = game.battleXml(db, pl, 1, e.grade, { win, enemyIds: g.map((x) => x.id), enemyName: guards(e.grade, pl.level)[0].name, enemyLevel: 10 + e.grade * 4 });
   return { win, xml: '<userinfo><LastSPUpdatePastTime>0</LastSPUpdatePastTime></userinfo>' + fightXml };
 }
 function openBox(db, pl, index) {

@@ -73,3 +73,13 @@ Grain and nostrum are sold in the mystery shop (5 or 10 at a time).
 - Every **(ours)** value above.
 - Pet master skill in fights: the master pet is sent with each fight, but the skill's damage is only shown by the client.
 - The 3-chest boss stages of the Ninja Test (5, 10, 15) have not been played in game yet.
+
+- **Ninja Treasure (2 Nov 2026):** refresh 100 gold, board every 2 h, explore 35 / 70 / 300 / 320 / 1000 (original), 1000 after the 5th **(ours)**.
+- **Arena daily reward (2 Nov 2026):** 26 000 - 1000 x rank silver for ranks 1-10 (original), then -60 a rank **(ours)**, at least 2000 (original); reputation = silver / 5 (original).
+- **Treasure chests (2 Nov 2026):** prize lists original; weights, gold price without a key (50 / 20 / 5), 25 + 5 x VIP gold-chest opens a day and 8% key drops in story fights **(ours)**.
+- **Eight Gates (2 Nov 2026):** 8 points a level, cost 80 x level souls + 15 x souls silver (original); bonus curve fitted to the photo totals **(ours)**, max level 150.
+- **Daily task chests (2 Nov 2026):** 250 points, chests 30 / 60 / 90 **(ours)**, 120 / 160 / 210 / 250 (original); 250 chest original; other contents **(ours)**.
+- **Shinobi training (2 Nov 2026):** 2 Super Ninja Pills or 1 pill + 10 gold (original); 10 times 20 pills or 10 + 80 gold **(ours)**.
+- **Growth Fund (2 Nov 2026):** 500 gold, VIP3, 2500 back at Lv50 150 / 70 150 / 90 200 (original); Lv110 200, 130 250, 150 250, 170 300, 190 300, 210 350, 230 350 **(ours)**.
+- **Save time (2 Nov 2026):** one Big Ramen = ceil(200 / stage energy) fights of the furthest story stage, rounded down to hundreds (fits the original photo exactly); VIP1 and level 80 (original); 2 chances a day per VIP level **(ours)**, then 10 gold (original).
+- **Enemy strength (ours, 1 Nov 2026):** enemy team defence 285 at stage 1-2 (from the owner's video of the original) growing evenly to 2 500 000 at the last story stage; Battles use the same range over their 175 rounds; Ninja Test guards = stage value (1160 / 1950 / 2980 / 10 065 at stages 1 / 2 / 4 / 14, from photos) x min(1, (level/280)^2) (fits 5 photos; 2 Nov 2026), bosses +30% (ours).

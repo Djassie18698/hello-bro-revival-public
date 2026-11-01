@@ -156,6 +156,7 @@ html.embed .wrap{padding-top:18px}
     <div class="tile"><span class="e">⏱️</span><span>Uptime</span><b id="tUp">0m</b></div>
     <div class="tile"><span class="e">📡</span><span>Requests</span><b id="tReq">0</b></div>
     <div class="tile"><span class="e">💾</span><span>Save size</span><b id="tDb">0</b></div>
+    <div class="tile"><span class="e">🩺</span><span>Save health</span><b id="tHealth">-</b></div>
     <div class="tile"><span class="e">🧩</span><span>Game files</span><b id="tVer">28.0</b></div>
   </div>
 
@@ -258,7 +259,7 @@ async function refresh() {
   $('since').textContent = 'Running since ' + new Date(s.started).toLocaleString() + ' · Node ' + s.node + ' · port ' + s.port;
   $('addr').innerHTML = s.addresses.map((a) => '<span title="Click to copy" onclick="copy(\'' + a.url + '\')"><em>' + a.kind + '</em>' + a.url + '</span>').join('');
   $('tOnline').textContent = s.online.length; $('tPlayers').textContent = fmt(s.players); $('tUp').textContent = dur(s.now - s.started);
-  $('tReq').textContent = fmt(s.requests); $('tDb').textContent = size(s.dbSize); $('tVer').textContent = s.version;
+  $('tReq').textContent = fmt(s.requests); $('tDb').textContent = size(s.dbSize); if (s.db) { $('tHealth').textContent = s.db.health === 'ok' ? 'OK' : 'Check!'; $('tHealth').title = s.db.mode + ', ' + (s.cards || 0) + ' cards, last backup ' + (s.db.lastBackup ? new Date(s.db.lastBackup.at).toLocaleTimeString() : '-'); } $('tVer').textContent = s.version;
   $('brestart').disabled = !s.restartable; $('brestart').title = s.restartable ? '' : 'Start the server with START-SERVER.bat to use Restart';
   $('who').innerHTML = s.online.length ? s.online.map((p) => '<div class="pl"><div class="av" style="background:linear-gradient(135deg,' + GRAD[p.uid % GRAD.length] + ')">' + esc((p.nick || '?')[0].toUpperCase()) +
     '</div><div><b>' + esc(p.nick) + '</b> <small>level ' + p.level + ' · ' + (SCREEN[p.cgi] || 'playing') + ' · ' + ago(p.at) + '</small></div></div>').join('')

@@ -4,7 +4,6 @@
 const http = require('http');
 const net = require('net');
 const url = require('url');
-const { DatabaseSync } = require('node:sqlite');
 const handlers = require('./handlers');
 const admin = require('./admin');
 const settings = require('./settings');
@@ -16,20 +15,12 @@ for (const k of ['log', 'error']) {
   const orig = console[k].bind(console);
   console[k] = (...a) => { settings.addLog(k === 'error' ? 'error' : 'info', a.map((x) => (x && x.stack) || String(x)).join(' ')); orig(...a); };
 }
-// Safety copy of the save on every start (keeps the last 10) in backups/.
-try {
-  const fs = require('fs'), path = require('path');
-  const src = process.env.DB || 'hellobro.db';
-  if (fs.existsSync(src)) {
-    fs.mkdirSync('backups', { recursive: true });
-    fs.copyFileSync(src, path.join('backups', 'hellobro-' + new Date().toISOString().replace(/[:.]/g, '-') + '.db'));
-    const old = fs.readdirSync('backups').filter((f) => f.endsWith('.db')).sort().slice(0, -10);
-    for (const f of old) fs.rmSync(path.join('backups', f), { force: true });
-  }
-} catch (e) { console.error('backup failed', e.message); }
-const db = new DatabaseSync(process.env.DB || 'hellobro.db');
+// The save: SQLite in WAL mode with a health check and backups on start and every 6 h (db.js).
+const dbm = require('./db');
+const db = dbm.open(process.env.DB || 'hellobro.db');
 require('./schema')(db);
 require('./consumption').ensure(db); // gold-spending log (trigger) for the spending event
+dbm.indexes(db);
 
 function parseBody(req) {
   return new Promise((res) => {
@@ -72,6 +63,10 @@ const httpServer = http.createServer({ insecureHTTPParser: true }, async (req, r
     resp.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': fs.statSync(file).size });
     return fs.createReadStream(file).pipe(resp);
   }
+  if (u.pathname === '/progress.md') { // the progress page (docs/PROGRESS.md), shown in the control panel's Progress tab
+    resp.writeHead(200, { 'Content-Type': 'text/markdown; charset=utf-8', 'Cache-Control': 'no-store' });
+    return resp.end(require('fs').readFileSync(require('path').join(__dirname, 'docs', 'PROGRESS.md'), 'utf8'));
+  }
   if (u.pathname === '/' || u.pathname === '/panel') { // the control panel
     if (!admin.authorized(req)) { resp.writeHead(401, { 'WWW-Authenticate': 'Basic realm="Hello Bro"' }); return resp.end('password required'); }
     return admin.panel(resp, 'server');
@@ -88,6 +83,7 @@ const httpServer = http.createServer({ insecureHTTPParser: true }, async (req, r
   const h = handlers[cgi];
   settings.hit(params.Uid, cgi);
   let out;
+  const t0 = Date.now();
   try {
     out = h ? h({ db, params, cgi, host: req.headers.host }) : null;
   } catch (e) {
@@ -98,7 +94,7 @@ const httpServer = http.createServer({ insecureHTTPParser: true }, async (req, r
     console.log(`\x1b[33m[UNHANDLED] ${req.method} ${req.url} ${body}\x1b[0m`);
     out = '<root code="1"><message>not implemented</message></root>';
   } else {
-    console.log(`\x1b[90m[ok] ${cgi} Cmd=${params.Cmd || ''}\x1b[0m`); // grey: game requests
+    console.log(`\x1b[90m[ok] ${cgi} Cmd=${params.Cmd || ''} ${Date.now() - t0} ms ${(out.length / 1024).toFixed(1)} KB\x1b[0m`); // grey: game requests
   }
   resp.writeHead(200, { 'Content-Type': 'text/xml; charset=utf-8' });
   // The Lua side looks for a <RENLONG> root; the C++ side accepts any root name.

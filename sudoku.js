@@ -4,10 +4,13 @@
 const game = require('./game');
 
 const el = (n, v) => `<${n}>${v}</${n}>`;
-const REFRESH_SECS = 4 * 3600, REFRESH_CASH = 20;
+// From the Facebook photos of the original (FINDINGS.md): refresh 100 gold, the board rerolls by itself every 2 h (countdowns 1:59:xx).
+const REFRESH_SECS = 2 * 3600, REFRESH_CASH = 100;
 // single-item drops (dropinfo col 12 != 1): ninjas, fragments, ramen, gold, silver
 const POOL = [28, 236, 221, 222, 69, 70, 33, 36, 38, 98, 99, 100, 42, 43];
-const cost = (got) => 10 + 10 * got;
+// Explore price by prizes already taken, counted on the photos: 0 -> 35, 1 -> 70, 2 -> 300, 3 -> 320, 4 -> 1000; after that 1000 (ours).
+const EXPLORE = [35, 70, 300, 320, 1000];
+const cost = (got) => EXPLORE[Math.min(got, EXPLORE.length - 1)];
 const now = () => Math.floor(Date.now() / 1000);
 
 function ensure(db) {

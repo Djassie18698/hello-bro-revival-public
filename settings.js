@@ -13,6 +13,9 @@ const EVENTS = [
   { id: 21, pos: 5, type: 1, icon: '✊', name: 'Rock paper scissors', desc: 'Play mora against the house (home screen button).' },
   { id: 24, pos: 7, type: 1, icon: '💎', name: 'Ninja treasure', desc: 'Number puzzle treasure hunt (home screen button).' },
   { id: 17, pos: 9, type: 1, icon: '🎲', name: 'Millionaire', desc: 'Board game with dice (home screen button).' },
+  { id: 16, pos: 20, type: 2, icon: '🗝️', name: 'Treasure chests', desc: 'Open gold / silver / bronze chests with keys (keys drop in story fights) or gold; the original prize lists.' },
+  { id: 7, pos: 19, type: 2, icon: '🎫', name: 'Scratch card', desc: '20 gold a card (1 free a day): scratch 3 matching faces to win 5 to 800 gold (original prizes).' },
+  { id: 19, pos: 18, type: 2, icon: '📈', name: 'Growth Fund', desc: 'VIP3+: pay 500 gold once, get 2500 gold back in steps at levels 50, 70, 90 ... (original).' },
   { id: 31, pos: 10, type: 1, icon: '🏁', name: 'Stage gift', desc: 'One-time gift for new players (home screen button).' },
   // Limited-time events: off until the owner switches them on. `screen` = the game's event id they show under (several may share one).
   { id: 'xmas', screen: 44, pos: 11, type: 2, limited: true, icon: '🎄', name: 'Christmas festival', desc: 'Win fights for Christmas Caps and Trees, trade them for Santa of the Six Paths. Only one festival at a time.' },
@@ -20,6 +23,11 @@ const EVENTS = [
   { id: 'godrecruit', screen: 46, pos: 12, type: 2, limited: true, icon: '🎰', name: 'God Recruit', desc: 'Slot machine of holiday god cards (300 gold a spin). Keep the card or return it for gold and energy, trade energy for cards.' },
   { id: 'hottreasure', screen: 43, pos: 13, type: 2, limited: true, icon: '💰', name: 'Hot Treasure', desc: 'Treasure hunt: 1 free hunt a day, then 100 gold (10 hunts 900). Ten hunts always give the top prize.' },
   { id: 'consumption', screen: 37, pos: 14, type: 2, limited: true, icon: '🪙', name: 'Gold spending rewards', desc: 'Spend gold while it runs: 3000 / 8000 / 13000 / 30000 gold unlock god cards, ninjutsu and dans (original rewards).' },
+  { id: 'diligence', screen: 33, pos: 15, type: 2, limited: true, icon: '💪', name: 'Diligence gift', desc: 'Every 20 training fights, 5 spar wins, 5 growths... today gives a reward, a few times a day.' },
+  { id: 'discount', screen: 27, pos: 16, type: 2, limited: true, icon: '🏷️', name: 'Limited discount', desc: 'Top up 980 gold (free here) while it runs and claim a gift worth 3000 gold, once.' },
+  { id: 'lottery', screen: 22, pos: 17, type: 2, limited: true, icon: '🎟️', name: 'Lottery', desc: 'Pick 4-digit numbers for 50 gold (3 a day). Drawn daily at 20:30; matching digits win prizes.' },
+  { id: 'groupbuy', screen: 13, pos: 21, type: 2, limited: true, icon: '🛒', name: 'Limited group purchase', desc: 'Discount packs with stock shared by the whole server (original prices: 100 Super Ninja Pills 1500 gold, 80 Reincarnation Pills 2000...). Runs 72 h.' },
+  { id: 'bench', noconf: true, limited: true, icon: '📏', name: 'Benchmark rivals in Spar', desc: 'Six computer rivals at the top of Spar with 100K, 500K, 1M, 2M, 4M and 8M defence. Free, no rewards: to test a team.' },
 ];
 const DISCORD = 'https://discord.gg/2Cbp4UDHrU';
 const DEFAULT_BANNER = 'Join our Discord for help, bugs and friends: discord.gg/2Cbp4UDHrU  (Settings > Join Discord)';

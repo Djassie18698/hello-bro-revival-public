@@ -7,6 +7,7 @@ const festival = require('./festival');
 const godrecruit = require('./godrecruit');
 const hottreasure = require('./hottreasure');
 const consumption = require('./consumption');
+const limited = require('./limited');
 const signin = require('./signin');
 const stagegift = require('./stagegift');
 const guild = require('./guild');
@@ -32,8 +33,13 @@ const el = (name, v) => `<${name}>${esc(v)}</${name}>`;
 // Public host the client should use for the game servers (set HOST to your LAN IP / domain).
 const publicHost = (ctx) => process.env.HOST || ctx.host || 'localhost:18080';
 
+// Account picker (owner request): every save is per server id, so the game's own server list doubles as a character list.
+// Server 1 = the main character; 2-4 are extra slots for trying a fresh starter account (same login, separate character and world).
 const servers = (ctx) => [
-  { id: 1, name: 'Konoha', domain: `http://${publicHost(ctx)}`, busy: 1, para1: 1062, para2: 2, payzoneid: 1 },
+  { id: 1, name: 'Konoha (main)', domain: `http://${publicHost(ctx)}`, busy: 1, para1: 1062, para2: 2, payzoneid: 1 },
+  { id: 2, name: 'Starter slot 1', domain: `http://${publicHost(ctx)}`, busy: 1, para1: 1062, para2: 2, payzoneid: 2 },
+  { id: 3, name: 'Starter slot 2', domain: `http://${publicHost(ctx)}`, busy: 1, para1: 1062, para2: 2, payzoneid: 3 },
+  { id: 4, name: 'Starter slot 3', domain: `http://${publicHost(ctx)}`, busy: 1, para1: 1062, para2: 2, payzoneid: 4 },
 ];
 const serverXml = (s, tag) =>
   `<${tag}>` + Object.entries(s).map(([k, v]) => el(k, v)).join('') + `</${tag}>`;
@@ -82,7 +88,7 @@ function trainingFight(db, pl, chap, part, pos, buy) {
   // energy (and a boss try) but gives nothing and opens nothing.
   const foes = game.stageFoes(chap, stage);
   const ts = game.teamStats(db, pl.uid, pl.server_id);
-  const myPower = ts.slots.reduce((t, s) => t + (s.al + s.ah) / 2 + (s.dl + s.dh) / 2, 0);
+  const myPower = (ts.total.al + ts.total.ah) / 2; // my total attack against their total defence (only my side attacks)
   const theirPower = foes.reduce((t, f) => t + f.power, 0);
   // Only boss rows are real fights: normal rows are story stages (the client skips the fight and spins the wheel, crediting exp/silver itself),
   // so they always count as won.
@@ -119,7 +125,10 @@ function trainingFight(db, pl, chap, part, pos, buy) {
 // dropinfo ids: 250 Sage Stone III*1, 19 "One, Two-Star Equipment Card", 16 "One,Two-Star Shinobi Card", 21 "Three-Star Equipment Card", 17 "Three-Star Shinobi Card".
 function stageAward(db, pl, row, coin, exp) {
   const r = Math.random();
-  const dropId = Number(process.env.HB_STAGE_DROP) || (row[38] ? (r < 0.5 ? 21 : 17) : r < 0.5 ? 250 : r < 0.8 ? 19 : 16); // HB_STAGE_DROP = test aid
+  // Treasure chest keys also drop from story fights, as in the original (victory card "Bronze Key", photo 2500; dropinfo 549/550 list
+  // keys with stage drops): 8% a bronze key on a normal stage, 8% a silver key on a boss stage (ours).
+  const key = Math.random() < 0.08 ? (row[38] ? 513 : 514) : 0;
+  const dropId = Number(process.env.HB_STAGE_DROP) || key || (row[38] ? (r < 0.5 ? 21 : 17) : r < 0.5 ? 250 : r < 0.8 ? 19 : 16); // HB_STAGE_DROP = test aid
   const xml = game.grantDrop(db, pl, dropId);
   if (!xml) return game.awardFull({});
   const had = Number((xml.match(/<coin>(\d+)<\/coin>/) || [0, 0])[1]);
@@ -164,6 +173,7 @@ const TOPUPS = [ // the original Google Play packages (rmb = price in cents)
   { id: 6, rmb: 1999, gold: 1050, give: 80 }, { id: 7, rmb: 4999, gold: 2700, give: 300 }, { id: 8, rmb: 9999, gold: 5500, give: 800 },
 ];
 
+const MIGRATE_PRICE = 300; // change country, gold (photo 3270)
 // Tower sweep counter: one progress row per day (stage = uses + 1; setStage keeps the max).
 const SWEEP_DAILY = 5;
 const sweepKey = () => 100000 + Math.floor(Date.now() / 86400000);
@@ -280,8 +290,12 @@ module.exports = {
       caneat: 0, meritlevel: 0, meritscore: game.propCounts(db, acc.uid, pl.server_id)[9994] || 0, warpower: 0, LastActionUpdatePastTime: en.pass, LastSPUpdatePastTime: game.spState(db, pl).pass,
       score: pl.exp || 0, viplevel: // <score> is the client's EXP field (CPlayerDataMgr +0xd4); 0 here reset the exp bar on every main page visit
         vip.level(db, acc.uid, pl.server_id), soul: game.propCounts(db, acc.uid, pl.server_id)[9999] || 0, totalm: 0 };
-    return '<root code="0"><user>' + Object.entries(f).map(([k, v]) => el(k, v)).join('') + '</user>' + gs.cards +
-      gs.suitlist + '<defensesuitlist></defensesuitlist>' + game.chipbagXml(db, acc.uid, pl.server_id) +
+    // Cmd 1302 = login (CLoadInitInfoScene: the client builds its card bag from this). Cmd 1301 = every return to Home / level-up / store:
+    // those screens only read <user> (+ the home screen the team list), so the whole card list (408 cards = 180 KB for a big account,
+    // the "Loading for you, Master" wait) and the fragment bag are left out there.
+    const full = Number(p.Cmd) !== 1301;
+    return '<root code="0"><user>' + Object.entries(f).map(([k, v]) => el(k, v)).join('') + '</user>' + (full ? gs.cards : '') +
+      gs.suitlist + '<defensesuitlist></defensesuitlist>' + (full ? game.chipbagXml(db, acc.uid, pl.server_id) : '') +
       gs.ninjalist + '<defenseninjalist></defenseninjalist>' +
       `<chapinfo currentchap="${cur.chap}" currentstage="${game.stagePart(cur.chap, cur.stage).part}"/>` +
       // the scrolling banner at the top of the home screen (CDefaultMainMenu -> CMainMenu::InitAnnounceMsg; '|' separates messages); text from the Server Manager.
@@ -308,7 +322,7 @@ module.exports = {
     const count = Number(p.Cmd) === 1901 ? 10 : 1;
     const res = game.pull(db, pl, Number(p.Type || 2), count, Number(p.Free) === 1);
     if (res.error) return '<root code="5"><message>' + res.error + '</message></root>';
-    return '<root code="0">' + game.pullXml(res, count) + '</root>';
+    return '<root code="0">' + game.pullXml(res, count, Number(p.Type || 2)) + '</root>';
   },
 
   // Spar / Plunder opponent lists.
@@ -324,6 +338,8 @@ module.exports = {
     const acc = accountBySession(db, p);
     if (!acc) return '<root code="3"><message>session expired</message></root>';
     const pl = db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(acc.uid, Number(p.ServerID || 1));
+    const bench = game.benchFight(db, pl, Number(p.ToUid)); // benchmark rival: free, no reward
+    if (bench) return `<root code="0"><userinfo><LastSPUpdatePastTime>${game.spState(db, pl).pass}</LastSPUpdatePastTime></userinfo>` + bench.xml + game.awardFull({}) + '</root>';
     if (!game.spUse(db, pl)) return '<root code="5"><message>not enough grudge</message></root>';
     const r = game.sparFight(db, pl, Number(p.ToUid));
     game.addExp(db, pl, r.exp);
@@ -349,6 +365,7 @@ module.exports = {
     const pl = acc && db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(acc.uid, Number(p.ServerID || 1));
     if (!pl) return '<root code="3"><message>session expired</message></root>';
     const r = seals.merge(db, pl, Number(p.MarkID));
+    if (!r.error) game.bumpTask(db, pl.uid, pl.server_id, 3); // daily task: synthesize seals
     return r.error ? `<root code="5"><message>${r.error}</message></root>` : '<root code="0">' + r.xml + '</root>';
   },
   // Country war (War > War tab). Cmd 7200 status (also polled from home), 7300ish war info.
@@ -410,6 +427,31 @@ module.exports = {
     const items = mails.map((m) => `<msg><iTime>${m.ts}</iTime><ID>${m.id + 1}</ID><iStatus>1</iStatus><text>${esc(m.from_nick + ': ' + m.text)}</text></msg>`).join('');
     return `<root code="0"><msglist>${items}<msg><iTime>${S.newsAt(db)}</iTime><ID>1</ID><iStatus>1</iStatus><text>${esc(S.news(db))}</text></msg></msglist></root>`;
   },
+  // Diligence gift (limited.js): Cmd 1 list, Cmd 2 AwardID claim
+  rl_r_multiple_task: ({ db, params: p }) => {
+    const acc = accountBySession(db, p);
+    const pl = acc && db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(acc.uid, Number(p.ServerID || 1));
+    if (!pl) return '<root code="3"><message>session expired</message></root>';
+    if (Number(p.Cmd) === 2) { const r = limited.diligenceClaim(db, pl, Number(p.AwardID)); return r.error ? `<root code="5"><message>${r.error}</message></root>` : '<root code="0">' + r.xml + '</root>'; }
+    const x = limited.diligenceXml(db, pl);
+    return x ? '<root code="0">' + x + '</root>' : '<root code="5"><message>the event is over</message></root>';
+  },
+  // Lottery (limited.js): Cmd 1 info, 2 my numbers, 3 winners
+  rl_r_lottery: ({ db, params: p }) => {
+    const acc = accountBySession(db, p);
+    const pl = acc && db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(acc.uid, Number(p.ServerID || 1));
+    if (!pl) return '<root code="3"><message>session expired</message></root>';
+    const x = limited.lotteryXml(db, pl, Number(p.Cmd));
+    return x ? '<root code="0">' + x + '</root>' : '<root code="5"><message>the event is over</message></root>';
+  },
+  // Lottery: Cmd 1 No = buy a ticket, Cmd 2 = claim the last draw's prize
+  rl_w_lottery: ({ db, params: p }) => {
+    const acc = accountBySession(db, p);
+    const pl = acc && db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(acc.uid, Number(p.ServerID || 1));
+    if (!pl) return '<root code="3"><message>session expired</message></root>';
+    const r = Number(p.Cmd) === 2 ? limited.lotteryClaim(db, pl) : limited.lotteryBuy(db, pl, p.No);
+    return r.error ? `<root code="5"><message>${r.error}</message></root>` : '<root code="0">' + r.xml + '</root>';
+  },
   rl_r_bulletin: () => { // keep id 1 and this text: a new id makes the client crash (CSystemADMgr::SaveLocalNotice); announcements go to rl_r_msg
     const now = Math.floor(Date.now() / 1000);
     return `<root code="0"><servertime>${now}</servertime><bulletinlist><bulletin><id>1</id><type>1</type><cycle>60</cycle><begintime>${now - 86400}</begintime><endtime>${now + 86400 * 3650}</endtime><content>Welcome back to Hello Bro! Offline revival server - have fun with your friends.</content></bulletin></bulletinlist></root>`;
@@ -419,12 +461,14 @@ module.exports = {
     const pl = acc && db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(acc.uid, Number(p.ServerID || 1));
     if (!pl) return '<root code="3"><message>session expired</message></root>';
     if (Number(p.Cmd) === 9002) return '<root code="0">' + sevenday.stateXml(db, pl) + '</root>';
+    if (Number(p.Cmd) === 9004) { const x = limited.discountXml(db, pl); return x ? '<root code="0">' + x + '</root>' : '<root code="5"><message>the event is over</message></root>'; }
     return '<root code="0">' + game.actXml(db, pl) + '</root>';
   },
   rl_w_activity: ({ db, params: p }) => {
     const acc = accountBySession(db, p);
     const pl = acc && db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(acc.uid, Number(p.ServerID || 1));
     if (!pl) return '<root code="3"><message>session expired</message></root>';
+    if (Number(p.ActType) === 10) { const r = limited.discountClaim(db, pl); return r.error ? `<root code="5"><message>${r.error}</message></root>` : '<root code="0">' + r.xml + '</root>'; }
     if (Number(p.ActType) === 7) {
       const s = sevenday.claim(db, pl, Number(p.ActID));
       return s.error ? `<root code="5" msg="${s.error}"><message>${s.error}</message></root>` : '<root code="0">' + s.xml + '</root>';
@@ -440,6 +484,12 @@ module.exports = {
     if (!pl) return '<root code="3"><message>session expired</message></root>';
     const cmd = Number(p.Cmd);
     if (cmd === 7) return '<root code="0">' + signin.listXml(db, pl) + '</root>';
+    // Growth Fund (growthfund.js): 1 info, 2 buy, 3 Id claim
+    if (cmd >= 1 && cmd <= 3) {
+      const gf = require('./growthfund');
+      const r = cmd === 1 ? { xml: gf.xml(db, pl) } : cmd === 2 ? gf.buy(db, pl, vip.level(db, pl.uid, pl.server_id)) : gf.claim(db, pl, Number(p.Id));
+      return r.error ? `<root code="5"><message>${r.error}</message></root>` : '<root code="0">' + r.xml + '</root>';
+    }
     // festival trade event (festival.js): 9 info, 10 item shop, 11 trade ExId
     if (cmd === 9) { const x = festival.infoXml(db, pl); return x ? '<root code="0">' + x + '</root>' : '<root code="5"><message>the festival is over</message></root>'; }
     if (cmd === 10) return '<root code="0">' + festival.shopXml(db, pl) + '</root>';
@@ -544,6 +594,7 @@ module.exports = {
     if (acc && t) {
       db.prepare('UPDATE players SET gold=gold+? WHERE uid=? AND server_id=?').run(t.gold + t.give, acc.uid, Number(p.ServerID || 1));
       vip.addExp(db, acc.uid, Number(p.ServerID || 1), t.rmb / 10); // cents / 10 = dollars x 10
+      limited.logTopup(db, acc.uid, Number(p.ServerID || 1), t.gold + t.give);
     }
     return '<root code="1"></root>';
   },
@@ -554,7 +605,9 @@ module.exports = {
     const t = TOPUPS.find((x) => x.id === Number(p.RechargeId));
     if (!t) return '<root code="5"><message>bad package</message></root>';
     db.prepare('UPDATE players SET gold=gold+? WHERE uid=? AND server_id=?').run(t.gold + t.give, pl.uid, pl.server_id);
+    game.bumpTask(db, pl.uid, pl.server_id, 13); // daily task: recharge
     vip.addExp(db, pl.uid, pl.server_id, t.rmb / 10); // cents / 10 = dollars x 10
+    limited.logTopup(db, pl.uid, pl.server_id, t.gold + t.give);
     // <viplevel>: the hot-updated top-up screen (28.0.9) sets the new level right away
     return '<root code="0">' + game.awardFull({ cash: t.gold + t.give }) + el('viplevel', vip.level(db, pl.uid, pl.server_id)) + '</root>';
   },
@@ -606,10 +659,41 @@ module.exports = {
     const acc = accountBySession(db, p);
     const pl = acc && db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(acc.uid, Number(p.ServerID || 1));
     if (!pl) return '<root code="3"><message>session expired</message></root>';
+    // Treasure chests (box.js): Cmd 1804 info, 1803 Goodsid = open the gold / silver / bronze chest
+    if (Number(p.Cmd) === 1804 || Number(p.Cmd) === 1803) {
+      const box = require('./box');
+      if (Number(p.Cmd) === 1804) return '<root code="0">' + box.infoXml(db, pl) + '</root>';
+      const r = box.open(db, pl, Number(p.Goodsid));
+      return r.code ? `<root code="${r.code}"></root>` : r.error ? `<root code="5"><message>${r.error}</message></root>` : '<root code="0">' + r.xml + '</root>';
+    }
+    // Immigration Card (prop 18) from switchCountry.lua: Cmd 1802 + ToCountry; costs the card and MIGRATE_PRICE gold.
+    if (p.ToCountry !== undefined) {
+      const to = Number(p.ToCountry);
+      if (!(to >= 1 && to <= 4) || to === pl.country) return '<root code="5"><message>choose another country</message></root>';
+      if ((game.propCounts(db, pl.uid, pl.server_id)[18] || 0) < 1) return '<root code="5"><message>no Immigration Card</message></root>';
+      if (pl.gold < MIGRATE_PRICE) return '<root code="5"><message>not enough gold</message></root>';
+      game.propAdd(db, pl.uid, pl.server_id, 18, -1);
+      db.prepare('UPDATE players SET country=?, gold=gold-? WHERE uid=? AND server_id=?').run(to, MIGRATE_PRICE, pl.uid, pl.server_id);
+      return '<root code="0"></root>';
+    }
     const r = game.propUse(db, pl, Number(p.Goodsid));
     if (r.error) return `<root code="5"><message>${r.error}</message></root>`;
     return `<root code="0"><propuse ap="${r.ap}" sp="0" yinzi="${r.coin}" left="${r.left}" rest="99" max="99"/></root>`;
   },
+
+  // Scratch card (scratch.js): Cmd 1700 info, 1701 scratch one card. The reply is the whole document (attributes on the root).
+  rl_w_guaguale: ({ db, params: p }) => {
+    const acc = accountBySession(db, p);
+    const pl = acc && db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(acc.uid, Number(p.ServerID || 1));
+    if (!pl) return '<root code="3"><message>session expired</message></root>';
+    const sc = require('./scratch');
+    if (Number(p.Cmd) === 1701) { const r = sc.play(db, pl); return r.error ? `<root code="5"><message>${r.error}</message></root>` : r.xml; }
+    return sc.infoXml(db, pl);
+  },
+
+  // Change-country price (switchCountry.lua reads <price>). The original said "related to population of target country"; the
+  // Facebook photo 3270 shows 300 gold, used for every country (ours: no population rule).
+  rl_r_migrate_price: () => `<root code="0"><price>${MIGRATE_PRICE}</price></root>`,
 
   rl_w_strengthen: ({ db, params: p }) => {
     const acc = accountBySession(db, p);
@@ -661,7 +745,14 @@ module.exports = {
       if (cards.some((c) => db.prepare('SELECT 1 FROM team WHERE uid=? AND server_id=? AND seq=?').get(pl.uid, pl.server_id, c.seq))) return '<root code="5"><message>take the card out of the team first</message></root>';
       for (const c of cards) { db.prepare('DELETE FROM equipped WHERE uid=? AND server_id=? AND seq=?').run(pl.uid, pl.server_id, c.seq); db.prepare('DELETE FROM cards WHERE seq=?').run(c.seq); }
       game.propAdd(db, pl.uid, pl.server_id, 9999, total);
+      game.bumpTask(db, pl.uid, pl.server_id, 7, cards.length); // daily task: refine cards
       return `<root code="0"><award dropid="1" coin="0"><cardlist></cardlist><proplist></proplist><chipbag></chipbag><coin>0</coin><cash>0</cash><exp>0</exp><chip>0</chip><action>0</action><merit>0</merit><pk_action>0</pk_action><soul>${total}</soul></award></root>`;
+    }
+    if (cmd === 2) {
+      const r = game.secretRefresh(db, pl);
+      if (r.code) return `<root code="${r.code}"></root>`;
+      if (r.error) return `<root code="5"><message>${r.error}</message></root>`;
+      return '<root code="0">' + r.xml + '</root>';
     }
     return '<root code="0">' + game.secretXml(db, pl) + '</root>';
   },
@@ -731,7 +822,7 @@ module.exports = {
     if (!pl) return '<root code="3"><message>session expired</message></root>';
     const bag = Number(p.BagId), cmd = Number(p.Cmd);
     if (cmd === 1) { const x = game.potentialXml(db, pl, bag); return x ? `<root code="0">${x}</root>` : '<root code="5"><message>no such card</message></root>'; }
-    if (cmd === 2) { const d = game.potentialRoll(db, pl, bag, Number(p.CostId)); return d.error ? `<root code="5"><message>${d.error}</message></root>` : `<root code="0"><add_num att="${d.att}" def="${d.def}" ckr="${d.ckr}"/><cost miyao="0" yuanbao="0"/></root>`; }
+    if (cmd === 2) { const d = game.potentialRoll(db, pl, bag, Number(p.CostId)); return d.error ? `<root code="5"><message>${d.error}</message></root>` : `<root code="0"><add_num att="${d.att}" def="${d.def}" ckr="${d.ckr}"/><cost miyao="${d.pills}" yuanbao="${d.gold}"/></root>`; }
     return game.potentialSave(db, pl, bag) ? '<root code="0"></root>' : '<root code="5"><message>no such card</message></root>';
   },
 
@@ -748,6 +839,7 @@ module.exports = {
       const status = got ? 1 : dollars >= 49 ? 2 : 0;
       return `<root code="0"><basic><status>${status}</status><amount>4900</amount><current>${Math.min(dollars, 49) * 100}</current></basic><awards><item icon1="props_015" icon2="props_049" icon3="props_073" drop1="11" drop2="15" drop3="374"><id>1</id><num>1</num></item></awards></root>`;
     }
+    if (cmd === 4) { const x = require('./groupbuy').listXml(db, pl); return x ? '<root code="0">' + x + '</root>' : '<root code="5"><message>the event is over</message></root>'; } // limited group purchase
     if (cmd === 3) return '<root code="0">' + mora.infoXml(db, pl) + '</root>';
     if (cmd === 20) return '<root code="0"><basic><prop_num>99</prop_num></basic></root>';
     if (cmd === 8) return '<root code="0"><basic><cost_prop>1</cost_prop><prop_num>99</prop_num></basic></root>';
@@ -755,7 +847,8 @@ module.exports = {
     if (cmd === 13) return '<root code="0"><basic><cash>0</cash><remain>86400</remain></basic><award dropid="1"><cardlist></cardlist><proplist></proplist><chipbag></chipbag><coin>0</coin><cash>0</cash><exp>0</exp><chip>0</chip><action>0</action><merit>0</merit><pk_action>0</pk_action><soul>0</soul></award></root>';
     if (cmd === 15) return '<root code="0">' + slot.info(db, pl) + '</root>';
     if (cmd === 18) return '<root code="0">' + slot.listXml(db, pl) + '</root>';
-    if (cmd === 9) return '<root code="0"><basic><cost_cash>0</cost_cash><level>1</level><star>0</star><newlife>0</newlife><add_attack>0</add_attack><add_defense>0</add_defense></basic></root>';
+    if (cmd === 9) return '<root code="0">' + game.inheritInfoXml(db.prepare('SELECT * FROM cards WHERE seq=? AND uid=? AND server_id=? AND type=1').get(Number(p.SrcCardIndex), pl.uid, pl.server_id)) + '</root>'; // succession
+
     return '<root code="0"></root>';
   },
   rl_w_comm: ({ db, params: p }) => {
@@ -764,6 +857,8 @@ module.exports = {
     if (!pl) return '<root code="3"><message>session expired</message></root>';
     const wc = Number(p.Cmd);
     if (wc === 18) { const r = consumption.claim(db, pl, Number(p.ID)); return r.error ? `<root code="5"><message>${r.error}</message></root>` : '<root code="0">' + r.xml + '</root>'; }
+    if (wc === 13) { const r = game.inherit(db, pl, Number(p.SrcCardIndex), Number(p.DstCardIndex)); return r.code ? `<root code="${r.code}"></root>` : r.error ? `<root code="5"><message>${r.error}</message></root>` : '<root code="0">' + r.xml + '</root>'; } // succession
+    if (wc === 8) { const r = require('./groupbuy').buy(db, pl, Number(p.LimitPackID)); return r.code ? `<root code="${r.code}"></root>` : r.error ? `<root code="5"><message>${r.error}</message></root>` : '<root code="0">' + r.xml + '</root>'; }
     if (wc === 10) { const r = game.mergeChips(db, pl, Number(p.ChipBagID)); return r.error ? `<root code="5"><message>${r.error}</message></root>` : '<root code="0">' + r.xml + '</root>'; }
     if (wc === 24) return '<root code="0">' + slot.bet(db, pl) + '</root>';
     if (wc === 23) { const r = slot.spin(db, pl); return r.error ? `<root code="5"><message>${r.error}</message></root>` : '<root code="0">' + r.xml + '</root>'; }
@@ -785,22 +880,38 @@ module.exports = {
     return '<root code="0"></root>';
   },
 
-  // "Save time": trade ramen (prop 3) for exp + silver based on the current training chapter. Cmd 1 = info, Cmd 2 = exchange one.
+  // "Save time": trade one Big Ramen (BIG_ENERGY_ITEM_ID = 4, from libgame.so) for the exp + silver of the player's furthest story stage.
+  // Original screen (Facebook photo 2212): "Chapter 11 chapter, 6 round, Exp 3200, Silver 3800", "(only for VIP1 and those over Lv.80)",
+  // "chances", "Gain 10Gold", "VIP1 +2/day". Stage 11-6 costs 18 energy and pays 270 exp / 324 silver, so the photo = 12 fights
+  // (ceil(200 energy / 18)) rounded down to hundreds; that rule is used for every stage. Chances a day = 2 x VIP level (ours, from
+  // "+2/day"); once they are used up each exchange costs 10 gold (the "Gain 10Gold" button). Cmd 1 = info, Cmd 2 = exchange one.
   rl_r_savetime: ({ db, params: p }) => {
     const acc = accountBySession(db, p);
     const sid = Number(p.ServerID || 1);
     const pl = acc && db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(acc.uid, sid);
     if (!pl) return '<root code="3"><message>session expired</message></root>';
-    const RAMEN = 3, chap = game.getStage(db, pl.uid, sid, 1000), exp = 500 * Math.max(1, pl.level), coin = 500 * Math.max(1, pl.level);
-    let have = game.propCounts(db, pl.uid, sid)[RAMEN];
-    if (have === undefined) { game.propAdd(db, pl.uid, sid, RAMEN, 99); have = 99; }
+    const RAMEN = 4, GOLD = 10, VIP_MIN = 1, LEVEL_MIN = 80, PER_VIP = 2;
+    const chap = db.prepare('SELECT MAX(chap) c FROM progress WHERE uid=? AND server_id=? AND chap BETWEEN 1 AND 19').get(pl.uid, sid).c || 1;
+    const round = Math.min(game.getStage(db, pl.uid, sid, chap), game.chapterStages(chap));
+    const row = game.table('roundinfo').rows.find((r) => r[4] === chap && r[2] === round) || [];
+    const fights = Math.ceil(200 / Math.max(1, row[22] || 1));
+    const exp = Math.floor((fights * (row[23] || 0)) / 100) * 100, coin = Math.floor((fights * (row[24] || 0)) / 100) * 100;
+    const have = game.propCounts(db, pl.uid, sid)[RAMEN] || 0;
+    db.exec('CREATE TABLE IF NOT EXISTS savetime (uid INTEGER, server_id INTEGER, day TEXT, used INTEGER, PRIMARY KEY(uid, server_id))');
+    const today = new Date().toISOString().slice(0, 10);
+    const st = db.prepare('SELECT * FROM savetime WHERE uid=? AND server_id=?').get(pl.uid, sid);
+    const vipLv = vip.level(db, pl.uid, sid), used = st && st.day === today ? st.used : 0, total = PER_VIP * vipLv;
     if (Number(p.Cmd) === 2) {
+      if (vipLv < VIP_MIN || pl.level < LEVEL_MIN) return `<root code="5"><message>only for VIP${VIP_MIN} and those over Lv.${LEVEL_MIN}</message></root>`;
       if (have < 1) return '<root code="5"><message>no ramen</message></root>';
+      const pay = used >= total ? GOLD : 0;
+      if (pay && pl.gold < pay) return '<root code="5"><message>not enough gold</message></root>';
       game.propAdd(db, pl.uid, sid, RAMEN, -1); game.addExp(db, pl, exp);
-      db.prepare('UPDATE players SET coin=coin+? WHERE uid=? AND server_id=?').run(coin, pl.uid, sid);
+      db.prepare('UPDATE players SET coin=coin+?, gold=gold-? WHERE uid=? AND server_id=?').run(coin, pay, pl.uid, sid);
+      db.prepare('INSERT OR REPLACE INTO savetime VALUES (?,?,?,?)').run(pl.uid, sid, today, used + 1);
       return `<root code="0"><basic><ratio>1</ratio><exp>${exp}</exp><coin>${coin}</coin><remain>${have - 1}</remain></basic></root>`;
     }
-    return `<root code="0"><basic><chapter>${chap}</chapter><round>1</round><prop_num>${have}</prop_num><total_trans>99</total_trans><used_trans>0</used_trans><cost_cash>10</cost_cash><vip_add>99</vip_add><exp>${exp}</exp><coin>${coin}</coin><vip_limit>1</vip_limit><level_limit>1</level_limit></basic></root>`;
+    return `<root code="0"><basic><chapter>${chap}</chapter><round>${round}</round><prop_num>${have}</prop_num><total_trans>${total}</total_trans><used_trans>${Math.min(used, total)}</used_trans><cost_cash>${GOLD}</cost_cash><vip_add>${PER_VIP}</vip_add><exp>${exp}</exp><coin>${coin}</coin><vip_limit>${VIP_MIN}</vip_limit><level_limit>${LEVEL_MIN}</level_limit></basic></root>`;
   },
 
   // Mail actions (read / delete / accept): nothing to change on this server, acknowledge.
@@ -867,7 +978,7 @@ module.exports = {
       const ok = db.prepare('INSERT OR IGNORE INTO rank_claims VALUES(?,?,?,?)').run(pl.uid, pl.server_id, 'arena', new Date().toISOString().slice(0, 10)).changes;
       if (!ok) return '<root code="5"><message>already claimed today</message></root>';
       const r = db.prepare('SELECT rank FROM arena WHERE uid=?').get(pl.uid);
-      const rank = r ? r.rank : 999, coin = Math.max(2000, 50000 - rank * 1000), rep = Math.max(50, 1000 - rank * 20);
+      const rank = r ? r.rank : 999, { coin, renown: rep } = game.arenaReward(rank); // same as the list shows
       game.propAdd(db, pl.uid, pl.server_id, 9996, rep);
       db.prepare('UPDATE players SET coin=coin+? WHERE uid=? AND server_id=?').run(coin, pl.uid, pl.server_id);
       return '<root code="0">' + game.awardFull({ coin }) + '</root>';
@@ -1072,13 +1183,20 @@ module.exports = {
       return '<root code="0"><dup_list>' + list + '</dup_list></root>';
     }
     const chap = Number(p.Chap || 1), round = Number(p.Round || 1);
-    const exp = 60 * chap, coin = 90 * chap;
+    const trow = game.towerRow(chap, round) || [];
+    const exp = trow[20] || 60 * chap, coin = trow[21] || 90 * chap; // the round's own reward (towerfloor)
+    const tfoes = game.towerFoes(chap, round) || [];
+    const tts = game.teamStats(db, pl.uid, sid);
+    const tAtk = (tts.total.al + tts.total.ah) / 2, tDef = tfoes.reduce((t, f) => t + f.def, 0);
+    if (process.env.HB_PVE ? process.env.HB_PVE !== 'win' : tAtk * (0.85 + Math.random() * 0.3) < tDef) { // lost: no reward, the round stays open
+      return '<root code="0"><userinfo><LastSPUpdatePastTime>0</LastSPUpdatePastTime></userinfo>' + game.battleXml(db, pl, chap, round * 5, { foes: tfoes, win: false, enemyName: String((game.ninjas().get((trow[4] || 0)) || [])[2] || 'Enemy'), enemyLevel: 10 * chap }) + game.awardFull({}) + '</root>';
+    }
     game.addExp(db, pl, exp);
     db.prepare('UPDATE players SET coin=coin+? WHERE uid=? AND server_id=?').run(coin, pl.uid, sid);
     game.setStage(db, pl.uid, sid, 1000 + chap, round + 1);
     game.bumpTask(db, pl.uid, sid, 1);
     festival.dropOnWin(db, pl, 'training'); // battles drop Christmas Caps too
-    return '<root code="0"><userinfo><LastSPUpdatePastTime>0</LastSPUpdatePastTime></userinfo>' + game.battleXml(db, pl, chap, round * 5, { enemyLevel: 10 * chap }) + stageAward(db, pl, [], 0, 0) + '</root>'; // dropid must be non-zero or the result screen crashes (GitHub #3); the client credits exp/silver itself
+    return '<root code="0"><userinfo><LastSPUpdatePastTime>0</LastSPUpdatePastTime></userinfo>' + game.battleXml(db, pl, chap, round * 5, { foes: tfoes.length ? tfoes : undefined, win: true, enemyName: String((game.ninjas().get((trow[4] || 0)) || [])[2] || 'Enemy'), enemyLevel: 10 * chap }) + stageAward(db, pl, [], 0, 0) + '</root>'; // dropid must be non-zero or the result screen crashes (GitHub #3); the client credits exp/silver itself
   },
 
   // Daily tasks: Cmd 1 = list, Cmd 2 = claim an award (AwardID).
@@ -1129,7 +1247,7 @@ module.exports = {
     const owned = shopOwned(p);
     // unpriced items the player owns (pet grain/nostrum...) are listed too: this list is where the client learns its bag counts
     const goods = game.table('consumeinfo').rows.filter((r) => r[4] > 0 || r[5] > 0 || (owned[r[1]] || 0) > 0).map((r, k) => ({
-      propid: r[0], prop_name: esc(r[2]), prop_icon: r[3], prop_yuanbao: r[4], prop_yinzi: r[5], prop_show: 1, prop_function: r[7],
+      propid: r[0], prop_name: esc(r[2]), prop_icon: r[3], prop_yuanbao: game.shopGold(r), prop_yinzi: r[5], prop_show: 1, prop_function: r[7],
       prop_function_value1: n(r[8]), prop_function_value2: n(r[9]), prop_function_value3: n(r[10]), prop_function_value4: n(r[11]), bagnum: owned[r[1]] || 0, prop_order: k + 1,
     }));
     // Cmd 1600 (sent at login) is ALSO read for the goods list (CTradeMgr::onHttpRequestCompleted: LoadGiftPackInfo, then LoadConsumInfo, then

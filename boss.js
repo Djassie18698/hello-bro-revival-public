@@ -79,6 +79,7 @@ function fight(db, pl) {
   const coin = 2000 + Math.round(dmg / 100);
   db.prepare('UPDATE players SET coin=coin+? WHERE uid=? AND server_id=?').run(coin, pl.uid, pl.server_id);
   const look = BOSSES[(b.level - 1) % BOSSES.length];
+  game.bumpTask(db, pl.uid, pl.server_id, 8); // daily task: join the world boss
   const fightXml = game.battleXml(db, pl, 1, 1, { enemyName: 'World Boss Lv.' + b.level, enemyLevel: 50 + b.level * 5 });
   return { xml: '<userinfo><LastSPUpdatePastTime>0</LastSPUpdatePastTime></userinfo>' + fightXml + game.awardFull({ coin }) +
     '<xiao>' + el('restlife', Math.max(0, hp)) + el('award', score) + el('outputalltime', m.dmg + dmg) + '</xiao>', look };

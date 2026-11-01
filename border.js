@@ -97,6 +97,7 @@ function clear(db, pl, toUid) {
     exp = 100; merit = 10;
     game.addExp(db, pl, exp);
     game.propAdd(db, pl.uid, pl.server_id, 9994, merit);
+    game.bumpTask(db, pl.uid, pl.server_id, 11); // daily task: clear borders
   }
   const fight = game.battleXml(db, pl, 1, 1, { win, enemyName: enemy.nick, enemyUid: enemy.uid, enemyLevel: enemy.level });
   return { code: 0, xml: `<userinfo><LastSPUpdatePastTime>0</LastSPUpdatePastTime>${el('Exp', exp)}${el('Merit', merit)}</userinfo>` + fight + game.awardFull({ exp }) };
