@@ -90,3 +90,12 @@ Grain and nostrum are sold in the mystery shop (5 or 10 at a time).
 - Daily spending gift (`dailyevents.js`): all tiers and rewards (ours): 100 / 500 / 1000 / 2000 gold a day.
 - Recharge streak (`dailyevents.js`): "$3 a day" is the screen's own text; the 7 daily gifts and the bonus (300 Reincarnation Pills + 200 Souls Dan) are (ours).
 
+## Balancing from the photos (2 Nov 2026, later)
+- Monthly sign-in (`signin.js`): days 1-16 and their VIP x2 marks are ORIGINAL (photos 0516, 1871). (ours): which cards (4-star pack days 4 / 9, 5-star pack day 12), days 17-28 = days 5-16 again with VIP marks +4 (at most v15).
+- Top-up (`handlers.js` TOPUPS): ORIGINAL packages and the first-top-up x3. (ours): $49.99 = 2400 + 300.
+- Akatsuki (`guild.js`): ORIGINAL max levels, the level-5 / level-9 costs and requirements, members 6 + level, donation amounts, mall prices and 30 min refresh. (ours): lower-level costs, +5% donation / +10% mission profit per building level, which item the 2100 + 900 / 3000 + 1800 / scroll goods are, 9 mall spots (last 3 at Mall Lv5), one buy per spot per refresh.
+- Country war (`war.js`): ORIGINAL 10 points + 10 exploit + 36 EXP + 36 silver a win, 2 + 2 to the defender. (ours): nothing for a failed attacker.
+- Spar (`game.sparFight`): ORIGINAL 15 / 5 W.A.; EXP = level + 4 / a third (ours, fitted to one photo); silver ours.
+- Element Change (`game.elementChange`): ORIGINAL 12 pills + 2000 silver for a God card. (ours): 10 / 9 / 6 pills for 5 / 4 / 3-star cards.
+- God evolve: ORIGINAL 100 Development Dan. Equipment advance: ORIGINAL 50 000 silver. Small EXP-card bags: ORIGINAL 2000 silver (armor / trinket / skill bags ours).
+

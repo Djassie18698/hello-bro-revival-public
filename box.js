@@ -4,7 +4,7 @@
 // <propuse left golddouble silverdouble copperdouble cashcost>[<award>]</propuse>.
 // ORIGINAL: the prize list of each chest is the client's own boxOpenInfoData.lua (shown with the Detail button), keys are items
 // 22-24 and drop from fights ("Bronze Key" victory card, photo 2500); "chances today to open the treasure chest 75/75, VIP1 +5 times"
-// (photos 2442, 3574). (ours): the weights, key prices in gold, gold chest opens a day = 25 + 5 x VIP, keys from story fights.
+// (photos 2442, 3574). (ours): the weights, key prices in gold, keys from story fights.
 const game = require('./game');
 
 // [prize, weight]; prize = { drop } (dropinfo id), { drop, n } (that drop n times), { gold }, { coin }, { prop, n } or 'double'
@@ -28,7 +28,8 @@ function state(db, pl) {
   if (r.day !== today()) { r.day = today(); r.gold_opened = 0; db.prepare('UPDATE boxopen SET day=?, gold_opened=0 WHERE uid=? AND server_id=?').run(r.day, pl.uid, pl.server_id); }
   return r;
 }
-const goldTotal = (db, pl) => 25 + 5 * require('./vip').level(db, pl.uid, pl.server_id);
+// gold chest opens a day: the game's own vipinfo column 24 ("open gold chest 25 times" at VIP1 ... 75 at VIP11, photo 3574); VIP0 20 (ours)
+const goldTotal = (db, pl) => { const v = require('./vip').level(db, pl.uid, pl.server_id); return (game.table('vipinfo').rows.find((r) => r[0] === v) || [])[24] || 20; };
 
 function infoXml(db, pl) {
   const st = state(db, pl), have = game.propCounts(db, pl.uid, pl.server_id), total = goldTotal(db, pl);

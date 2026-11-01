@@ -439,7 +439,10 @@ function sparFight(db, pl, toUid) {
   else theirs = botAtk(rv.level, rv.star || 3);
   const win = process.env.HB_SPAR ? process.env.HB_SPAR === 'win' : mine * (0.7 + Math.random() * 0.6) >= theirs; // HB_SPAR = test aid
   const xml = battleXml(db, pl, 0, 1, { enemyIds: [rv.ninja, rv.ninja, rv.ninja], enemyName: rv.nick, enemyUid: rv.id, enemyLevel: rv.level, win });
-  const coin = win ? 3 + rv.level : 0, exp = win ? 14 : 2;
+  // ORIGINAL (Facebook photo 0078, spar preview at level 224): win EXP 228 + 15 W.A., lose EXP 76 + 5 W.A. (ours): EXP = level + 4 for a win,
+  // a third of it for a loss (fits that one photo); the silver stays ours (the photo's silver could not be worked out).
+  const coin = win ? 3 + rv.level : 0, exp = win ? pl.level + 4 : Math.round((pl.level + 4) / 3);
+  propAdd(db, pl.uid, pl.server_id, 9994, win ? 15 : 5); // W.A. (war achievements)
   return { win, xml, coin, exp };
 }
 
@@ -683,6 +686,10 @@ function propUse(db, pl, goodsId) {
   return { ap, coin, left: have - 1 };
 }
 
+// Small EXP-card bags: ORIGINAL (Facebook photo 2695) Ninja Bag (S) and Weapon Bag (S) cost 2000 silver (the game's table says 2800); the
+// armor / trinket / skill bags (ours) the same. The rest keeps the giftinfo price (Ninja Bag (L) 13 000 and SageStone bags match the photos).
+const PACK_SILVER = { 1: 2000, 3: 2000, 4: 2000, 5: 2000, 6: 2000 };
+const packSilver = (r) => PACK_SILVER[r[0]] ?? r[5];
 // Gift packs: only packs whose drop row gives ninja cards work (equipment/ninjutsu cards are not implemented yet).
 function packBuy(db, pl, packId) {
   const g = table('giftinfo').rows.find((r) => r[0] === packId);
@@ -690,7 +697,7 @@ function packBuy(db, pl, packId) {
   const drop = table('dropinfo').rows.find((r) => r[0] === Math.round(g[8]));
   if (!drop) return { error: 'this pack is not available on the revival server yet' };
   const name = String(g[2]).toLowerCase();
-  const costG = g[4], costS = g[5];
+  const costG = g[4], costS = packSilver(g);
   if (pl.gold < costG || pl.coin < costS) return { error: 'not enough gold' };
   let give; // () => [type, id, seq]
   if (drop[3] && ninjas().has(drop[3])) give = () => [1, drop[3], giveCard(db, pl.uid, pl.server_id, drop[3])];
@@ -725,9 +732,32 @@ function strengthen(db, pl, srcSeq, eatSeqs) {
   return { exp, cost };
 }
 
+// ---- Element change (ui_attributeDanLayer: rl_w_newlife Cmd 5 ReadyCard = price, Cmd 6 = change) ---------------------------------
+// ORIGINAL (Facebook photos 1425, 1494): a 5-star God card costs 12 Element Change Pills (item 33) + 2000 silver, the new element is random,
+// "Higher quality needs more pills". (ours): 3 pills a star below that (3-star 6, 4-star 9, 5-star 10), 2000 silver for every card.
+const ELEMENT_COIN = 2000;
+const elementPills = (c) => { const s = (ninjas().get(c.ninja_id) || [])[11] || 3; return s >= 6 ? 12 : s >= 5 ? 10 : s >= 4 ? 9 : 6; };
+function elementPrice(db, pl, seq) {
+  const c = db.prepare('SELECT * FROM cards WHERE seq=? AND uid=? AND server_id=? AND type=1').get(seq, pl.uid, pl.server_id);
+  return c ? { coin: ELEMENT_COIN, pills: elementPills(c), card: c } : null;
+}
+function elementChange(db, pl, seq) {
+  const p = elementPrice(db, pl, seq);
+  if (!p) return { error: 'choose a shinobi card' };
+  if (pl.coin < p.coin) return { error: 'not enough silver' };
+  if ((propCounts(db, pl.uid, pl.server_id)[33] || 0) < p.pills) return { error: 'not enough Element Change Pills' };
+  const now = p.card.attri || 1, choices = [1, 2, 3, 4, 5].filter((x) => x !== now);
+  const next = choices[Math.floor(Math.random() * choices.length)];
+  propAdd(db, pl.uid, pl.server_id, 33, -p.pills);
+  db.prepare('UPDATE players SET coin=coin-? WHERE uid=? AND server_id=?').run(p.coin, pl.uid, pl.server_id);
+  db.prepare('UPDATE cards SET attri=? WHERE seq=?').run(next, seq);
+  return { attri: next };
+}
+
 // ---- Reincarnation / equipment advance (rl_w_newlife Cmd 7): ReadyCard gains +1 grade, EatCard (same item id) is consumed.
 const NEWLIFE_MAX = (type) => (type === 1 ? 8 : table('equipnewlifeprop').rows.length); // shinobi: 8 (v28 draws rebirth outlines 1-8 only, GetTopInlayFrame; the card lists 8 bonuses)
-const NEWLIFE_COST = (grade) => 5000 * grade;
+// equipment advance: ORIGINAL (Facebook photos 0683, 0684, 0751, 0752) 50 000 silver, at most 3 times ("Available of reinforce three times")
+const NEWLIFE_COST = () => 50000;
 function newlife(db, pl, readySeq, eatSeq, grade) {
   ensure(db);
   const a = db.prepare('SELECT * FROM cards WHERE seq=? AND uid=? AND server_id=?').get(readySeq, pl.uid, pl.server_id);
@@ -744,7 +774,9 @@ function newlife(db, pl, readySeq, eatSeq, grade) {
   const star = (ninjas().get(a.ninja_id) || [])[11] || 5;
   const pills = (table('newlifeconfig').rows.find((r) => r[2] === next && r[3] === star) || [])[4] || 0;
   if (!b && (propCounts(db, pl.uid, pl.server_id)[11] || 0) < pills) return { error: 'not enough reincarnation pills' };
-  const cost = 0;
+  const cost = a.type === 1 ? 0 : NEWLIFE_COST(); // shinobi reincarnation takes no silver; equipment advance does
+  if (pl.coin < cost) return { error: 'not enough silver' };
+  if (cost) db.prepare('UPDATE players SET coin=coin-? WHERE uid=? AND server_id=?').run(cost, pl.uid, pl.server_id);
   db.prepare('UPDATE cards SET newlife=?, level=1, exp=0 WHERE seq=?').run(next, a.seq);
   if (b) db.prepare('DELETE FROM cards WHERE seq=?').run(b.seq);
   else propAdd(db, pl.uid, pl.server_id, 11, -pills);
@@ -1445,6 +1477,8 @@ function godOf(ninjaId) {
   const gods = [...ninjas().values()].filter((r) => r[4] === 1 && r[6] === 0 && r[11] === 6 && /God/.test(r[2]));
   return gods.length ? gods[ninjaId % gods.length][0] : null; // no same-character god card: pick a god card deterministically
 }
+// God evolve: ORIGINAL (Facebook photos 2065, 2066, 2169) 100 evolution pills (Development Dan, item 34) plus the attack and defense card.
+const GOD_COST = 100;
 function godSynth(db, pl, attSeq, defSeq) {
   ensure(db);
   const a = db.prepare('SELECT * FROM cards WHERE seq=? AND uid=? AND server_id=? AND type=1').get(attSeq, pl.uid, pl.server_id);
@@ -1452,8 +1486,10 @@ function godSynth(db, pl, attSeq, defSeq) {
   if (!a || !b || a.seq === b.seq) return { error: 'cards missing' };
   const god = godOf(b.ninja_id) || godOf(a.ninja_id); if (!god) return { error: 'no evolution for this card' };
   for (const c of [a, b]) if (db.prepare('SELECT 1 FROM team WHERE seq=?').get(c.seq)) return { error: 'remove cards from the team first' };
+  if ((propCounts(db, pl.uid, pl.server_id)[34] || 0) < GOD_COST) return { error: 'Insufficient evolution pills' };
+  propAdd(db, pl.uid, pl.server_id, 34, -GOD_COST);
   db.prepare('DELETE FROM cards WHERE seq IN (?,?)').run(a.seq, b.seq);
   return { ninja: god, seq: giveCard(db, pl.uid, pl.server_id, god) };
 }
 
-module.exports = { inherit, inheritInfoXml, shopGold, secretRefresh, arenaReward, benchFight, stageForDefence, teamDefence, equipStats, sealBonus, ninjutsuBonus, addStats, chainPartsOf: (r) => partsOf(r), chainFits: (part, id) => fits(part, id), chainKnown: (part) => isKnown(part), matchRows, towerRow, towerFoes, unlockAll, growStarList, GROW_MAX, energyTick, stageTried, stageFoes, npcStats, orderUsedToday, ORDER_DAILY, spState, spUse, clearsNeeded, payHeapXml, payHeapClaim, actEnsure, recruitState, FREE_EVERY, BOSS_COST, chapterParts, stagePart, globalStage, partEntry, maxTeam, stageRow, stageState, stageCleared, chapterStages, furthestChapter, roundInfoXml, teamSwap, grantDrop, mergeChips, mergeAwards, ninjaStats, CHIP_BASE, chipCount, chipbagXml, godSynth, potentialXml, potentialRoll, potentialSave, newlife, NEWLIFE_MAX, NEWLIFE_COST, arenaListXml, arenaRankXml, arenaFight, gateXml, gateOpen, gateLevel, gateBonus, friendsXml, sageGrow, giveEquip, teamStats, awardXml, secretXml, secretBuy, soulOf, equip, strengthen, packBuy, propUse, propCounts, propAdd, shopBuy, actXml, actClaim, sparFight, rivalsXml, rivals, bumpTask, dailyXml, dailyClaim, awardFull, addExp, battleXml, getStage, setStage, pull, pullXml, table, ninjas, ensure, giveCard, ensureStarterTeam, stateXml, cardXml };
+module.exports = { GOD_COST, packSilver, elementPrice, elementChange, inherit, inheritInfoXml, shopGold, secretRefresh, arenaReward, benchFight, stageForDefence, teamDefence, equipStats, sealBonus, ninjutsuBonus, addStats, chainPartsOf: (r) => partsOf(r), chainFits: (part, id) => fits(part, id), chainKnown: (part) => isKnown(part), matchRows, towerRow, towerFoes, unlockAll, growStarList, GROW_MAX, energyTick, stageTried, stageFoes, npcStats, orderUsedToday, ORDER_DAILY, spState, spUse, clearsNeeded, payHeapXml, payHeapClaim, actEnsure, recruitState, FREE_EVERY, BOSS_COST, chapterParts, stagePart, globalStage, partEntry, maxTeam, stageRow, stageState, stageCleared, chapterStages, furthestChapter, roundInfoXml, teamSwap, grantDrop, mergeChips, mergeAwards, ninjaStats, CHIP_BASE, chipCount, chipbagXml, godSynth, potentialXml, potentialRoll, potentialSave, newlife, NEWLIFE_MAX, NEWLIFE_COST, arenaListXml, arenaRankXml, arenaFight, gateXml, gateOpen, gateLevel, gateBonus, friendsXml, sageGrow, giveEquip, teamStats, awardXml, secretXml, secretBuy, soulOf, equip, strengthen, packBuy, propUse, propCounts, propAdd, shopBuy, actXml, actClaim, sparFight, rivalsXml, rivals, bumpTask, dailyXml, dailyClaim, awardFull, addExp, battleXml, getStage, setStage, pull, pullXml, table, ninjas, ensure, giveCard, ensureStarterTeam, stateXml, cardXml };

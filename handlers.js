@@ -168,10 +168,16 @@ function mtree(db, p, shake) {
   return `<root code="0"><user><usedTimes>${m.used + 1}</usedTimes><freeTimes>${Math.max(0, free - 1)}</freeTimes><latestSilver>${win}</latestSilver><cash>${pl.gold - cost}</cash><coin>${pl.coin + win}</coin></user></root>`;
 }
 
-const TOPUPS = [ // the original Google Play packages (rmb = price in cents)
-  { id: 3, rmb: 99, gold: 45, give: 0 }, { id: 4, rmb: 499, gold: 240, give: 10 }, { id: 5, rmb: 999, gold: 490, give: 30 },
-  { id: 6, rmb: 1999, gold: 1050, give: 80 }, { id: 7, rmb: 4999, gold: 2700, give: 300 }, { id: 8, rmb: 9999, gold: 5500, give: 800 },
+// Top-up packages (rmb = price in cents). ORIGINAL (Facebook photos 1077, 1112, 1332, 1402, 1550, the in-game top-up screen): $0.99 = 45,
+// $4.99 = 225 + 15 bonus, $9.99 = 450 + 40, $19.99 = 950 + 100, $99.99 = 4800 + 700; before your first top-up every pack shows
+// "Gold x3 for 1st Recharge" ($0.99 = 135, $4.99 = 675, $9.99 = 1350) and the first one pays triple gold (no bonus).
+// (ours): $49.99 = 2400 + 300 (not on any photo).
+const TOPUPS = [
+  { id: 3, rmb: 99, gold: 45, give: 0 }, { id: 4, rmb: 499, gold: 225, give: 15 }, { id: 5, rmb: 999, gold: 450, give: 40 },
+  { id: 6, rmb: 1999, gold: 950, give: 100 }, { id: 7, rmb: 4999, gold: 2400, give: 300 }, { id: 8, rmb: 9999, gold: 4800, give: 700 },
 ];
+const hasPaid = (db, uid, sid) => vip.progress(db, uid, sid).exp > 0; // (accounts kept from before 30 Oct have VIP exp too)
+const topupGold = (db, uid, sid, t) => (hasPaid(db, uid, sid) ? t.gold + t.give : t.gold * 3);
 
 const MIGRATE_PRICE = 300; // change country, gold (photo 3270)
 // Tower sweep counter: one progress row per day (stage = uses + 1; setStage keeps the max).
@@ -589,7 +595,7 @@ module.exports = {
     const hp = acc && db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(acc.uid, Number(p.ServerID || 1));
     const heap = hp ? game.payHeapXml(db, hp, Math.floor(vp.exp / 10)) : '<payheaplist></payheaplist>';
     return `<root code="0">${heap}<maxlv>${vip.MAX_VIP}</maxlv><exp>${vp.exp}</exp><lvexp>${vp.lvexp}</lvexp>` +
-      '<canget>1</canget><first_pay>1</first_pay><multiple>1</multiple><servertime>0</servertime><endtime>0</endtime></root>';
+      '<canget>1</canget><first_pay>' + (acc && hasPaid(db, acc.uid, Number(p.ServerID || 1)) ? 1 : 0) + '</first_pay><multiple>1</multiple><servertime>0</servertime><endtime>0</endtime></root>';
   },
   // Top-up packages. Buying is FREE here (the hot-updated ui_purchaseLayer.lua calls rl_x_free_topup instead of Google Play).
   // Starter stage gift (free) and trivial acks for payment-related calls.
@@ -615,9 +621,10 @@ module.exports = {
     const acc = accountBySession(db, p);
     const t = TOPUPS.find((x) => x.id === Number(p.ItemId));
     if (acc && t) {
-      db.prepare('UPDATE players SET gold=gold+? WHERE uid=? AND server_id=?').run(t.gold + t.give, acc.uid, Number(p.ServerID || 1));
-      vip.addExp(db, acc.uid, Number(p.ServerID || 1), t.rmb / 10); // cents / 10 = dollars x 10
-      limited.logTopup(db, acc.uid, Number(p.ServerID || 1), t.gold + t.give, t.rmb);
+      const sid = Number(p.ServerID || 1), gold = topupGold(db, acc.uid, sid, t);
+      db.prepare('UPDATE players SET gold=gold+? WHERE uid=? AND server_id=?').run(gold, acc.uid, sid);
+      vip.addExp(db, acc.uid, sid, t.rmb / 10); // cents / 10 = dollars x 10
+      limited.logTopup(db, acc.uid, sid, gold, t.rmb);
     }
     return '<root code="1"></root>';
   },
@@ -627,12 +634,13 @@ module.exports = {
     if (!pl) return '<root code="3"><message>session expired</message></root>';
     const t = TOPUPS.find((x) => x.id === Number(p.RechargeId));
     if (!t) return '<root code="5"><message>bad package</message></root>';
-    db.prepare('UPDATE players SET gold=gold+? WHERE uid=? AND server_id=?').run(t.gold + t.give, pl.uid, pl.server_id);
+    const gold = topupGold(db, pl.uid, pl.server_id, t);
+    db.prepare('UPDATE players SET gold=gold+? WHERE uid=? AND server_id=?').run(gold, pl.uid, pl.server_id);
     game.bumpTask(db, pl.uid, pl.server_id, 13); // daily task: recharge
     vip.addExp(db, pl.uid, pl.server_id, t.rmb / 10); // cents / 10 = dollars x 10
-    limited.logTopup(db, pl.uid, pl.server_id, t.gold + t.give, t.rmb);
+    limited.logTopup(db, pl.uid, pl.server_id, gold, t.rmb);
     // <viplevel>: the hot-updated top-up screen (28.0.9) sets the new level right away
-    return '<root code="0">' + game.awardFull({ cash: t.gold + t.give }) + el('viplevel', vip.level(db, pl.uid, pl.server_id)) + '</root>';
+    return '<root code="0">' + game.awardFull({ cash: gold }) + el('viplevel', vip.level(db, pl.uid, pl.server_id)) + '</root>';
   },
   // Hall of fame: all real players ranked by level.
   rl_r_ninja_rank: ({ db, params: p }) => {
@@ -818,12 +826,22 @@ module.exports = {
     const x = guild.hallXml(db, pl);
     return x ? `<root code="0">${x}</root>` : '<root code="5"><message>no group</message></root>';
   },
-  rl_r_group_store: () => `<root code="0">${guild.shopXml()}</root>`,
+  // Akatsuki mall (guild.js): Cmd 1 list, Cmd 2 ItemIndex buy
+  rl_r_group_store: ({ db, params: p }) => {
+    const acc = accountBySession(db, p);
+    const pl = acc && db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(acc.uid, Number(p.ServerID || 1));
+    if (!pl) return '<root code="3"><message>session expired</message></root>';
+    if (Number(p.Cmd) === 2) { const r = guild.shopBuy(db, pl, Number(p.ItemIndex)); return r.code ? `<root code="${r.code}"></root>` : r.error ? `<root code="5"><message>${r.error}</message></root>` : '<root code="0">' + r.xml + '</root>'; }
+    const x = guild.shopXml(db, pl);
+    return x ? '<root code="0">' + x + '</root>' : '<root code="5"><message>no group</message></root>';
+  },
   rl_r_group_contri: ({ db, params: p }) => {
     const acc = accountBySession(db, p);
     const pl = acc && db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(acc.uid, Number(p.ServerID || 1));
     if (!pl) return '<root code="3"><message>session expired</message></root>';
     if (Number(p.Cmd) === 2) { const r = guild.donate(db, pl, p.Cash); return r.error ? `<root code="5"><message>${r.error}</message></root>` : '<root code="0"></root>'; }
+    if (Number(p.Cmd) === 3) return '<root code="0">' + guild.cardListXml(db, pl, Number(p.ContriType)) + '</root>';
+    if (Number(p.Cmd) === 4) { const r = guild.donateCards(db, pl, Number(p.ContriType), p.BagIndex); return r.error ? `<root code="5"><message>${r.error}</message></root>` : '<root code="0"></root>'; }
     const x = guild.contriXml(db, pl);
     return x ? `<root code="0">${x}</root>` : '<root code="5"><message>no group</message></root>';
   },
@@ -834,6 +852,15 @@ module.exports = {
     const pl = acc && db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(acc.uid, Number(p.ServerID || 1));
     if (!pl) return '<root code="3"><message>session expired</message></root>';
     if (Number(p.Cmd) === 8) return `<root code="0"><info><max_lv>${game.NEWLIFE_MAX(2)}</max_lv><coin>${game.NEWLIFE_COST(1)}</coin></info></root>`;
+    // Element change: Cmd 5 = price, Cmd 6 = change (the screen also reads the card's breakthrough bonuses, always 0 here)
+    if (Number(p.Cmd) === 5) {
+      const e = game.elementPrice(db, pl, Number(p.ReadyCard));
+      return e ? `<root code="0"><prop_transfer><coin>${e.coin}</coin><cost_prop>${e.pills}</cost_prop></prop_transfer></root>` : '<root code="5"><message>choose a shinobi card</message></root>';
+    }
+    if (Number(p.Cmd) === 6) {
+      const r = game.elementChange(db, pl, Number(p.ReadyCard));
+      return r.error ? `<root code="5"><message>${r.error}</message></root>` : `<root code="0"><prop_transfer><target_prop>${r.attri}</target_prop></prop_transfer><attack_tupo>0</attack_tupo><defence_tupo>0</defence_tupo><cha_tupo>0</cha_tupo></root>`;
+    }
     const r = game.newlife(db, pl, Number(p.ReadyCard), Number(p.EatCard), Number(p.NewLifeCount));
     return r.error ? `<root code="5"><message>${r.error}</message></root>` : `<root code="0"><newlife count="${r.grade}"/><addattack>${r.gain}</addattack><adddefend>${Math.round(r.gain / 2)}</adddefend></root>`;
   },
@@ -855,17 +882,19 @@ module.exports = {
     const pl = acc && db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(acc.uid, Number(p.ServerID || 1));
     if (!pl) return '<root code="3"><message>session expired</message></root>';
     const cmd = Number(p.Cmd);
-    if (cmd === 16) { // "49$ gift" on the top-up screen: status 0 not reached, 1 received, 2 can claim; amounts in cents. Gift = props_015 / props_049 / props_073 icons = drops 11, 15, 374
+    if (cmd === 16) { // "49$ gift" on the top-up screen: status 0 not reached, 1 received, 2 can claim; amounts in cents.
+      // ORIGINAL (Facebook photos 1332, 1527): Naruto Uzumaki (Attack Card) + 80 Reincarnation Pills + 150 Sage Stone III = drops 1312, 122, 558
       game.actEnsure(db);
       const dollars = Math.floor(vip.progress(db, pl.uid, pl.server_id).exp / 10);
       const got = db.prepare('SELECT 1 FROM actclaim WHERE uid=? AND server_id=? AND actid=9026').get(pl.uid, pl.server_id);
       const status = got ? 1 : dollars >= 49 ? 2 : 0;
-      return `<root code="0"><basic><status>${status}</status><amount>4900</amount><current>${Math.min(dollars, 49) * 100}</current></basic><awards><item icon1="props_015" icon2="props_049" icon3="props_073" drop1="11" drop2="15" drop3="374"><id>1</id><num>1</num></item></awards></root>`;
+      return `<root code="0"><basic><status>${status}</status><amount>4900</amount><current>${Math.min(dollars, 49) * 100}</current></basic><awards><item icon1="icon_npc30_6" icon2="props_033" icon3="props_035" drop1="1312" drop2="122" drop3="558"><id>1</id><num>1</num></item></awards></root>`;
     }
     if (cmd === 4) { const x = require('./groupbuy').listXml(db, pl); return x ? '<root code="0">' + x + '</root>' : '<root code="5"><message>the event is over</message></root>'; } // limited group purchase
     if (cmd === 3) return '<root code="0">' + mora.infoXml(db, pl) + '</root>';
-    if (cmd === 20) return '<root code="0"><basic><prop_num>99</prop_num></basic></root>';
-    if (cmd === 8) return '<root code="0"><basic><cost_prop>1</cost_prop><prop_num>99</prop_num></basic></root>';
+    // God evolve (ui_godCardSyntheticLayer): Cmd 20 = your evolution pills (Development Dan, item 34), Cmd 8 = the cost (game.GOD_COST)
+    if (cmd === 20) return `<root code="0"><basic><prop_num>${game.propCounts(db, pl.uid, pl.server_id)[34] || 0}</prop_num></basic></root>`;
+    if (cmd === 8) return `<root code="0"><basic><cost_prop>${game.GOD_COST}</cost_prop><prop_num>${game.propCounts(db, pl.uid, pl.server_id)[34] || 0}</prop_num></basic></root>`;
     if (cmd === 13) { const x = consumption.infoXml(db, pl); if (x) return '<root code="0">' + x + '</root>'; } // gold spending event (consumption.js)
     if (cmd === 13) return '<root code="0"><basic><cash>0</cash><remain>86400</remain></basic><award dropid="1"><cardlist></cardlist><proplist></proplist><chipbag></chipbag><coin>0</coin><cash>0</cash><exp>0</exp><chip>0</chip><action>0</action><merit>0</merit><pk_action>0</pk_action><soul>0</soul></award></root>';
     if (cmd === 15) return '<root code="0">' + slot.info(db, pl) + '</root>';
@@ -889,11 +918,11 @@ module.exports = {
     if (wc === 4) { const r = mora.play(db, pl, Number(p.GambleNPCID), Number(p.GambleMustWin) === 1); return r.error ? `<root code="5"><message>${r.error}</message></root>` : '<root code="0">' + r.xml + '</root>'; }
     if (wc === 7) { const r = mora.buyLife(db, pl, Number(p.GambleCashType)); return r.error ? `<root code="5"><message>${r.error}</message></root>` : '<root code="0"></root>'; }
     if (wc === 5 || wc === 6) { const r = mora.exchange(db, pl, Number(p.GambleExchangeID)); return r.error ? `<root code="5"><message>${r.error}</message></root>` : '<root code="0">' + r.xml + '</root>'; }
-    if (Number(p.Cmd) === 26) { game.actEnsure(db); // 49$ gift: a 5-star shinobi card, a 4-star ninjutsu card and Madara, once, after $49 of top-ups in total
+    if (Number(p.Cmd) === 26) { game.actEnsure(db); // 49$ gift (see rl_r_comm Cmd 16), once, after $49 of top-ups in total
       if (db.prepare('SELECT 1 FROM actclaim WHERE uid=? AND server_id=? AND actid=9026').get(pl.uid, pl.server_id)) return '<root code="610002"><message>received</message></root>';
       if (Math.floor(vip.progress(db, pl.uid, pl.server_id).exp / 10) < 49) return '<root code="610001"><message>top-up amount is insufficient</message></root>';
       db.prepare('INSERT INTO actclaim(uid,server_id,actid,subid) VALUES(?,?,9026,1)').run(pl.uid, pl.server_id);
-      return '<root code="0">' + game.mergeAwards([11, 15, 374].map((id) => game.grantDrop(db, pl, id)).filter(Boolean)) + '</root>';
+      return '<root code="0">' + game.mergeAwards([1312, 122, 558].map((id) => game.grantDrop(db, pl, id)).filter(Boolean)) + '</root>';
     }
     if (Number(p.Cmd) === 28) {
       const r = game.godSynth(db, pl, Number(p.AttackCardBagIndex), Number(p.DefenseCardBagIndex));
@@ -1277,7 +1306,7 @@ module.exports = {
     // the recruit info). Without goods there the client knew no items until the shop was opened, and the ramen buy window crashed (nil item).
     if (Number(p.Cmd) === 1600) {
       const packs = game.table('giftinfo').rows.map((r, k) => ({
-        package_id: r[0], package_name: esc(r[2]), package_icon: r[3], package_yuanbao: r[4], package_yinzi: r[5], package_show: 1,
+        package_id: r[0], package_name: esc(r[2]), package_icon: r[3], package_yuanbao: r[4], package_yinzi: game.packSilver(r), package_show: 1,
         package_function: r[7], package_function_value1: n(r[8]), package_function_value2: n(r[9]), package_function_value3: n(r[10]), package_function_value4: n(r[11]),
       }));
       return '<root code="0"><shoplist>' + rows('packages', packs) + rows('goods', goods) + rows('recruit', recruits) + '</shoplist></root>';

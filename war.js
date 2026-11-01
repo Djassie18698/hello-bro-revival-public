@@ -46,19 +46,27 @@ function attack(db, pl) {
   const mine = power(db, pl.uid, pl.server_id);
   const theirs = foe ? power(db, foe.uid, pl.server_id) : Math.round(mine * (0.6 + Math.random() * 0.6)); // guard bot when nobody is there
   const win = mine * (0.8 + Math.random() * 0.4) >= theirs;
-  const score = win ? 20 : 5;
-  game.propAdd(db, pl.uid, pl.server_id, 9994, win ? 10 : 2); // war exploit for the Reward shop
+  // ORIGINAL (Facebook photos 1307, 2315): a win (kill) = 10 points + 10 exploit (W.A.), EXP +36, silver +36; when an attacker fails,
+  // the player they attacked gets 2 points + 2 exploit. (ours): a failed attack gives the attacker nothing.
+  const score = win ? 10 : 0;
+  if (win) game.propAdd(db, pl.uid, pl.server_id, 9994, 10); // war exploit for the Reward shop
   db.prepare('UPDATE war SET score=score+?, kills=kills+?, alive=alive-? WHERE server_id=? AND day=? AND uid=?')
     .run(score, win ? 1 : 0, win ? 0 : 1, pl.server_id, day(), pl.uid);
   if (foe && win) { me(db, foe); db.prepare('UPDATE war SET beattack=beattack+1 WHERE server_id=? AND day=? AND uid=?').run(pl.server_id, day(), foe.uid); }
+  if (foe && !win) { // the defender held: 2 points + 2 exploit to them
+    me(db, foe);
+    db.prepare('UPDATE war SET score=score+2 WHERE server_id=? AND day=? AND uid=?').run(pl.server_id, day(), foe.uid);
+    game.propAdd(db, foe.uid, pl.server_id, 9994, 2);
+  }
   db.prepare('INSERT INTO war_log(server_id,uid,tuid,fromnick,tonick,fromcountry,tocountry,win,score) VALUES(?,?,?,?,?,?,?,?,?)')
     .run(pl.server_id, pl.uid, foe ? foe.uid : 0, pl.nick, foe ? foe.nick : 'Country Guard', pl.country, foe ? foe.country : opp[0], win ? 1 : 0, score);
-  const coin = win ? 3000 : 500;
+  const coin = win ? 36 : 0, exp = win ? 36 : 0;
   db.prepare('UPDATE players SET coin=coin+? WHERE uid=? AND server_id=?').run(coin, pl.uid, pl.server_id);
+  if (exp) game.addExp(db, db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(pl.uid, pl.server_id), exp);
   const fight = game.battleXml(db, pl, 1, 1, { win, enemyName: foe ? foe.nick : 'Country Guard', enemyUid: foe ? foe.uid : 0, enemyLevel: foe ? foe.level : pl.level });
   game.bumpTask(db, pl.uid, pl.server_id, 10); // daily task: join today's war
   // CWarInfoView reads only batter= from <CountryWar>; InitFromXML takes the ROOT, so userinfo/fight/award are root children.
-  return { xml: `<CountryWar batter="${win ? 1 : 0}"/><userinfo><LastSPUpdatePastTime>0</LastSPUpdatePastTime></userinfo>${fight}${game.awardFull({ coin })}` };
+  return { xml: `<CountryWar batter="${win ? 1 : 0}"/><userinfo><LastSPUpdatePastTime>0</LastSPUpdatePastTime></userinfo>${fight}${game.awardFull({ coin, exp })}` };
 }
 function revive(db, pl, cost = 20) {
   if (pl.gold < cost) return { error: 'not enough gold' };
