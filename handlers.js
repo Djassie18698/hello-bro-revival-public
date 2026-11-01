@@ -3,6 +3,10 @@ const crypto = require('crypto');
 const game = require('./game');
 const vip = require('./vip');
 const wheel = require('./wheel');
+const festival = require('./festival');
+const godrecruit = require('./godrecruit');
+const hottreasure = require('./hottreasure');
+const consumption = require('./consumption');
 const signin = require('./signin');
 const stagegift = require('./stagegift');
 const guild = require('./guild');
@@ -72,6 +76,8 @@ function trainingFight(db, pl, chap, part, pos, buy) {
     db.prepare('UPDATE players SET gold=gold-? WHERE uid=? AND server_id=?').run(game.BOSS_COST, pl.uid, pl.server_id);
   }
   const cost = row[22] || 3, exp = row[23] || 6, coin = row[24] || 15;
+  // Not enough energy: code 40004 makes the client open its ramen window (CSectionCellView::onHttpRequestCompleted) so the player can refill.
+  if (pl.energy < cost) return '<root code="40004"><message>not enough energy</message></root>';
   // Real enemies for this stage and a real result: my team's power against theirs, with some luck (ours: 0.85-1.15). A lost fight costs the
   // energy (and a boss try) but gives nothing and opens nothing.
   const foes = game.stageFoes(chap, stage);
@@ -96,6 +102,7 @@ function trainingFight(db, pl, chap, part, pos, buy) {
   if (now.clears >= game.clearsNeeded(row)) game.setStage(db, pl.uid, pl.server_id, chap, stage + 1); // enough clears: next stage opens
   if (stage >= game.chapterStages(chap) && now.clears >= game.clearsNeeded(row) && chap < 19) game.setStage(db, pl.uid, pl.server_id, chap + 1, 1); // next chapter opens
   game.bumpTask(db, pl.uid, pl.server_id, 1); game.bumpTask(db, pl.uid, pl.server_id, 2);
+  festival.dropOnWin(db, pl, 'training'); // Christmas Caps while a festival runs
   const energy = db.prepare('SELECT energy FROM players WHERE uid=? AND server_id=?').get(pl.uid, pl.server_id).energy;
   const curPart = game.stagePart(chap, game.getStage(db, pl.uid, pl.server_id, chap)).part; // next part opens when the boss falls
   const e = game.partEntry(db, pl, chap, part); // the client writes these into the part that was just fought
@@ -227,6 +234,7 @@ module.exports = {
   rl_w_login2: ({ db, params: p }) => {
     const acc = accountBySession(db, p, true);
     if (!acc) return '<root code="3"><message>session expired</message></root>';
+    require('./settings').hornPending.add(String(acc.uid)); // the top banner goes out once per login (see rl_r_mainpage)
     const pl = db.prepare('SELECT 1 FROM players WHERE uid=? AND server_id=?').get(acc.uid, Number(p.ServerID || 1));
     return (
       `<root code="0"><login_info>${el('hasreg', pl ? 1 : 0)}${el('userid', acc.uid)}${el('session', acc.session)}</login_info>` +
@@ -276,8 +284,10 @@ module.exports = {
       gs.suitlist + '<defensesuitlist></defensesuitlist>' + game.chipbagXml(db, acc.uid, pl.server_id) +
       gs.ninjalist + '<defenseninjalist></defenseninjalist>' +
       `<chapinfo currentchap="${cur.chap}" currentstage="${game.stagePart(cur.chap, cur.stage).part}"/>` +
-      // the scrolling banner at the top of the home screen (CDefaultMainMenu -> CMainMenu::InitAnnounceMsg; '|' separates messages); text from the Server Manager
-      `<horn><horninfo>${esc(require('./settings').banner(db))}</horninfo><hornflag>1</hornflag></horn></root>`;
+      // the scrolling banner at the top of the home screen (CDefaultMainMenu -> CMainMenu::InitAnnounceMsg; '|' separates messages); text from the Server Manager.
+      // Only ONCE per login, on the first home visit (Cmd 1301; the login call 1302 ignores it): every <horninfo> makes the client add another
+      // scrolling label to the top bar, which stays across screens, on top of the old one (they piled up).
+      (Number(p.Cmd) === 1301 && require('./settings').hornPending.delete(String(acc.uid)) ? `<horn><horninfo>${esc(require('./settings').banner(db))}</horninfo><hornflag>1</hornflag></horn>` : '') + '</root>';
   },
 
   // Gacha status (free pulls / pity counters). Everything available, nothing to track yet.
@@ -318,7 +328,7 @@ module.exports = {
     const r = game.sparFight(db, pl, Number(p.ToUid));
     game.addExp(db, pl, r.exp);
     db.prepare('UPDATE players SET coin=coin+? WHERE uid=? AND server_id=?').run(r.coin, pl.uid, pl.server_id);
-    if (r.win) { game.bumpTask(db, pl.uid, pl.server_id, 6); }
+    if (r.win) { game.bumpTask(db, pl.uid, pl.server_id, 6); festival.dropOnWin(db, pl, 'spar'); }
     // Plunder (Chip = seal fragment id): a win usually steals the fragment.
     const chip = Number(p.Chip) || 0;
     const got = chip && seals.plunder(db, pl, chip, r.win);
@@ -430,6 +440,19 @@ module.exports = {
     if (!pl) return '<root code="3"><message>session expired</message></root>';
     const cmd = Number(p.Cmd);
     if (cmd === 7) return '<root code="0">' + signin.listXml(db, pl) + '</root>';
+    // festival trade event (festival.js): 9 info, 10 item shop, 11 trade ExId
+    if (cmd === 9) { const x = festival.infoXml(db, pl); return x ? '<root code="0">' + x + '</root>' : '<root code="5"><message>the festival is over</message></root>'; }
+    if (cmd === 10) return '<root code="0">' + festival.shopXml(db, pl) + '</root>';
+    // Hot Treasure hunt (hottreasure.js): 12 info, 13 one hunt, 14 ten hunts
+    if (cmd === 12) { const x = hottreasure.infoXml(db, pl); return x ? '<root code="0">' + x + '</root>' : '<root code="5"><message>the event is over</message></root>'; }
+    if (cmd === 13 || cmd === 14) { const r = cmd === 13 ? hottreasure.huntOne(db, pl) : hottreasure.huntTen(db, pl); return r.error ? `<root code="5"><message>${r.error}</message></root>` : '<root code="0">' + r.xml + '</root>'; }
+    // God Recruit slot (godrecruit.js): 17 info, 18 spin, 19 keep, 20 return, 21 ChangeId trade
+    if (cmd === 17) { const x = godrecruit.infoXml(db, pl); return x ? '<root code="0">' + x + '</root>' : '<root code="5"><message>the event is over</message></root>'; }
+    if (cmd >= 18 && cmd <= 21) {
+      const r = cmd === 18 ? godrecruit.spin(db, pl) : cmd === 19 ? godrecruit.keep(db, pl) : cmd === 20 ? godrecruit.giveBack(db, pl) : godrecruit.trade(db, pl, Number(p.ChangeId));
+      return r.error ? `<root code="5"><message>${r.error}</message></root>` : '<root code="0">' + r.xml + '</root>';
+    }
+    if (cmd === 11) { const r = festival.trade(db, pl, Number(p.ExId)); return r.error ? `<root code="5"><message>${r.error}</message></root>` : '<root code="0">' + r.xml + '</root>'; }
     if (cmd === 8) {
       const r = signin.sign(db, pl, Number(p.SignId));
       return r.error ? `<root code="5"><message>${r.error}</message></root>` : '<root code="0">' + r.xml + '</root>';
@@ -568,6 +591,10 @@ module.exports = {
       if (r.error) return `<root code="5"><message>${r.error}</message></root>`;
       if (r.type !== 1) return `<root code="0"><shopbuy costyb="${r.costG}" costyz="${r.costS}"></shopbuy></root>`; // equipment: client crashes on the reveal dialog; cards show up after re-login
       return `<root code="0"><shopbuy costyb="${r.costG}" costyz="${r.costS}"><retobj type="${r.type}" id="${r.ninja}" count="${r.n}" bagid="${r.seq}" attr="${r.attrs}"/></shopbuy></root>`;
+    }
+    if (festival.isItem(Number(p.Goodsid))) { // festival shop (ui_commonBuyItemDialogCell: Goodsid, Counts=1)
+      const r = festival.buy(db, pl, Number(p.Goodsid));
+      return r.error ? `<root code="5"><message>${r.error}</message></root>` : `<root code="0"><shopbuy costyb="${r.costG}" costyz="0"><retobj type="2" id="${Number(p.Goodsid)}" count="1"/></shopbuy></root>`;
     }
     const cnt = Math.max(1, Math.min(999, Number(p.Count) || 1));
     const r = game.shopBuy(db, pl, Number(p.Goodsid), cnt);
@@ -724,6 +751,7 @@ module.exports = {
     if (cmd === 3) return '<root code="0">' + mora.infoXml(db, pl) + '</root>';
     if (cmd === 20) return '<root code="0"><basic><prop_num>99</prop_num></basic></root>';
     if (cmd === 8) return '<root code="0"><basic><cost_prop>1</cost_prop><prop_num>99</prop_num></basic></root>';
+    if (cmd === 13) { const x = consumption.infoXml(db, pl); if (x) return '<root code="0">' + x + '</root>'; } // gold spending event (consumption.js)
     if (cmd === 13) return '<root code="0"><basic><cash>0</cash><remain>86400</remain></basic><award dropid="1"><cardlist></cardlist><proplist></proplist><chipbag></chipbag><coin>0</coin><cash>0</cash><exp>0</exp><chip>0</chip><action>0</action><merit>0</merit><pk_action>0</pk_action><soul>0</soul></award></root>';
     if (cmd === 15) return '<root code="0">' + slot.info(db, pl) + '</root>';
     if (cmd === 18) return '<root code="0">' + slot.listXml(db, pl) + '</root>';
@@ -735,6 +763,7 @@ module.exports = {
     const pl = acc && db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(acc.uid, Number(p.ServerID || 1));
     if (!pl) return '<root code="3"><message>session expired</message></root>';
     const wc = Number(p.Cmd);
+    if (wc === 18) { const r = consumption.claim(db, pl, Number(p.ID)); return r.error ? `<root code="5"><message>${r.error}</message></root>` : '<root code="0">' + r.xml + '</root>'; }
     if (wc === 10) { const r = game.mergeChips(db, pl, Number(p.ChipBagID)); return r.error ? `<root code="5"><message>${r.error}</message></root>` : '<root code="0">' + r.xml + '</root>'; }
     if (wc === 24) return '<root code="0">' + slot.bet(db, pl) + '</root>';
     if (wc === 23) { const r = slot.spin(db, pl); return r.error ? `<root code="5"><message>${r.error}</message></root>` : '<root code="0">' + r.xml + '</root>'; }
@@ -888,7 +917,7 @@ module.exports = {
     if (cmd === 2) return tearRes(exam.setTeam(db, pl, p.card_index_list));
     if (cmd === 3) return tearRes(exam.exchange(db, pl, Number(p.reward_id)));
     if (cmd === 4) return tearRes(exam.buy(db, pl));
-    if (cmd === 5) return tearRes(exam.fight(db, pl));
+    if (cmd === 5) { const r = exam.fight(db, pl); if (r.win) festival.dropOnWin(db, pl, 'exam'); return tearRes(r); }
     if (cmd === 6) return tearRes(exam.openBox(db, pl, Number(p.box_index)));
     if (cmd === 7) return tearRes(exam.next(db, pl));
     return { code: 0, xml: exam.infoXml(db, pl) };
@@ -1048,6 +1077,7 @@ module.exports = {
     db.prepare('UPDATE players SET coin=coin+? WHERE uid=? AND server_id=?').run(coin, pl.uid, sid);
     game.setStage(db, pl.uid, sid, 1000 + chap, round + 1);
     game.bumpTask(db, pl.uid, sid, 1);
+    festival.dropOnWin(db, pl, 'training'); // battles drop Christmas Caps too
     return '<root code="0"><userinfo><LastSPUpdatePastTime>0</LastSPUpdatePastTime></userinfo>' + game.battleXml(db, pl, chap, round * 5, { enemyLevel: 10 * chap }) + stageAward(db, pl, [], 0, 0) + '</root>'; // dropid must be non-zero or the result screen crashes (GitHub #3); the client credits exp/silver itself
   },
 
@@ -1096,19 +1126,21 @@ module.exports = {
     const rows = (tag, list) => list.map((o) => `<${tag}>` + Object.entries(o).map(([k, v]) => el(k, v)).join('') + `</${tag}>`).join('');
     const esc = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const n = (v) => Math.round(Number(v) || 0);
-    if (Number(p.Cmd) === 1600) {
-      const packs = game.table('giftinfo').rows.map((r, k) => ({
-        package_id: r[0], package_name: esc(r[2]), package_icon: r[3], package_yuanbao: r[4], package_yinzi: r[5], package_show: 1,
-        package_function: r[7], package_function_value1: n(r[8]), package_function_value2: n(r[9]), package_function_value3: n(r[10]), package_function_value4: n(r[11]),
-      }));
-      return '<root code="0"><shoplist>' + rows('packages', packs) + rows('recruit', recruits) + '</shoplist></root>';
-    }
     const owned = shopOwned(p);
     // unpriced items the player owns (pet grain/nostrum...) are listed too: this list is where the client learns its bag counts
     const goods = game.table('consumeinfo').rows.filter((r) => r[4] > 0 || r[5] > 0 || (owned[r[1]] || 0) > 0).map((r, k) => ({
       propid: r[0], prop_name: esc(r[2]), prop_icon: r[3], prop_yuanbao: r[4], prop_yinzi: r[5], prop_show: 1, prop_function: r[7],
       prop_function_value1: n(r[8]), prop_function_value2: n(r[9]), prop_function_value3: n(r[10]), prop_function_value4: n(r[11]), bagnum: owned[r[1]] || 0, prop_order: k + 1,
     }));
+    // Cmd 1600 (sent at login) is ALSO read for the goods list (CTradeMgr::onHttpRequestCompleted: LoadGiftPackInfo, then LoadConsumInfo, then
+    // the recruit info). Without goods there the client knew no items until the shop was opened, and the ramen buy window crashed (nil item).
+    if (Number(p.Cmd) === 1600) {
+      const packs = game.table('giftinfo').rows.map((r, k) => ({
+        package_id: r[0], package_name: esc(r[2]), package_icon: r[3], package_yuanbao: r[4], package_yinzi: r[5], package_show: 1,
+        package_function: r[7], package_function_value1: n(r[8]), package_function_value2: n(r[9]), package_function_value3: n(r[10]), package_function_value4: n(r[11]),
+      }));
+      return '<root code="0"><shoplist>' + rows('packages', packs) + rows('goods', goods) + rows('recruit', recruits) + '</shoplist></root>';
+    }
     return '<root code="0"><shoplist>' + rows('goods', goods) + rows('recruit', recruits) + '<limit><actiongoods><total>0</total><rest>0</rest></actiongoods><bingliangwan><total>0</total><rest>0</rest></bingliangwan></limit></shoplist></root>';
   },
 };

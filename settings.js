@@ -14,6 +14,12 @@ const EVENTS = [
   { id: 24, pos: 7, type: 1, icon: '💎', name: 'Ninja treasure', desc: 'Number puzzle treasure hunt (home screen button).' },
   { id: 17, pos: 9, type: 1, icon: '🎲', name: 'Millionaire', desc: 'Board game with dice (home screen button).' },
   { id: 31, pos: 10, type: 1, icon: '🏁', name: 'Stage gift', desc: 'One-time gift for new players (home screen button).' },
+  // Limited-time events: off until the owner switches them on. `screen` = the game's event id they show under (several may share one).
+  { id: 'xmas', screen: 44, pos: 11, type: 2, limited: true, icon: '🎄', name: 'Christmas festival', desc: 'Win fights for Christmas Caps and Trees, trade them for Santa of the Six Paths. Only one festival at a time.' },
+  { id: 'newyear', screen: 44, pos: 11, type: 2, limited: true, icon: '🎆', name: 'New Year festival', desc: 'Same trade event with Kaguya for New Year rewards. Only one festival at a time.' },
+  { id: 'godrecruit', screen: 46, pos: 12, type: 2, limited: true, icon: '🎰', name: 'God Recruit', desc: 'Slot machine of holiday god cards (300 gold a spin). Keep the card or return it for gold and energy, trade energy for cards.' },
+  { id: 'hottreasure', screen: 43, pos: 13, type: 2, limited: true, icon: '💰', name: 'Hot Treasure', desc: 'Treasure hunt: 1 free hunt a day, then 100 gold (10 hunts 900). Ten hunts always give the top prize.' },
+  { id: 'consumption', screen: 37, pos: 14, type: 2, limited: true, icon: '🪙', name: 'Gold spending rewards', desc: 'Spend gold while it runs: 3000 / 8000 / 13000 / 30000 gold unlock god cards, ninjutsu and dans (original rewards).' },
 ];
 const DISCORD = 'https://discord.gg/2Cbp4UDHrU';
 const DEFAULT_BANNER = 'Join our Discord for help, bugs and friends: discord.gg/2Cbp4UDHrU  (Settings > Join Discord)';
@@ -30,12 +36,24 @@ function set(db, key, value) {
   ensure(db);
   db.prepare('INSERT INTO server_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key, JSON.stringify(value));
 }
+// events_off: the always-on events switched off (old setting); events: explicit on/off per id; events_on_at: when each was switched on.
 const eventsOff = (db) => new Set(get(db, 'events_off', []));
-const eventOn = (db, id) => !eventsOff(db).has(id);
+function eventOn(db, id) {
+  const m = get(db, 'events', {});
+  if (id in m) return !!m[id];
+  if (eventsOff(db).has(id)) return false;
+  const e = EVENTS.find((x) => x.id === id);
+  return !(e && e.limited);
+}
+const switchedOnAt = (db, id) => get(db, 'events_on_at', {})[id] || 0;
 function setEvent(db, id, on) {
-  const off = eventsOff(db);
-  if (on) off.delete(id); else off.add(id);
-  set(db, 'events_off', [...off]);
+  const m = get(db, 'events', {});
+  m[id] = !!on;
+  const e = EVENTS.find((x) => x.id === id);
+  // events that share one game screen (the festivals) are one at a time: switching one on switches the others off
+  if (on && e && e.screen) for (const o of EVENTS) if (o !== e && o.screen === e.screen) m[o.id] = false;
+  set(db, 'events', m);
+  if (on) { const at = get(db, 'events_on_at', {}); at[id] = Math.floor(Date.now() / 1000); set(db, 'events_on_at', at); }
 }
 const news = (db) => get(db, 'news', DEFAULT_NEWS);
 // Shown as the System note in the game's News screen (rl_r_msg Cmd 1802), dated when it was last changed. NOT the rl_r_bulletin popup:
@@ -47,6 +65,7 @@ function setNews(db, text) { set(db, 'news', text); set(db, 'news_at', Math.floo
 // ---- live stats -------------------------------------------------------------------------------------------------------
 const started = Date.now();
 const seen = new Map(); // uid -> { at, cgi }
+const hornPending = new Set(); // uids that logged in and still need the top banner once
 const log = [];         // last 300 lines for the manager page
 let requests = 0;
 function hit(uid, cgi) {
@@ -59,4 +78,4 @@ function addLog(kind, text) {
 }
 const online = (ms = 5 * 60000) => [...seen.entries()].filter(([, v]) => Date.now() - v.at < ms).map(([uid, v]) => ({ uid, ...v }));
 
-module.exports = { EVENTS, DISCORD, DEFAULT_BANNER, banner, DEFAULT_NEWS, get, set, eventOn, eventsOff, setEvent, news, newsAt, setNews, started, hit, addLog, log, online, stats: () => ({ requests }) };
+module.exports = { hornPending, EVENTS, DISCORD, DEFAULT_BANNER, banner, DEFAULT_NEWS, get, set, eventOn, eventsOff, setEvent, switchedOnAt, news, newsAt, setNews, started, hit, addLog, log, online, stats: () => ({ requests }) };

@@ -118,7 +118,7 @@ function fight(db, pl) {
   const score = win ? 10 * e.grade + (e.grade % 5 === 0 ? 30 : 0) : 0;
   save(db, pl, { left_count: e.left_count - 1, dead: dead.join('_'), gdead: gdead.join('_'), is_win: win ? 1 : 0, score: e.score + score });
   const fightXml = game.battleXml(db, pl, 1, e.grade, { win, enemyIds: g.map((x) => x.id), enemyName: guards(e.grade)[0].name, enemyLevel: 10 + e.grade * 4 });
-  return { xml: '<userinfo><LastSPUpdatePastTime>0</LastSPUpdatePastTime></userinfo>' + fightXml };
+  return { win, xml: '<userinfo><LastSPUpdatePastTime>0</LastSPUpdatePastTime></userinfo>' + fightXml };
 }
 function openBox(db, pl, index) {
   const e = me(db, pl);

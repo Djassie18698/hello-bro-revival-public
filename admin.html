@@ -130,6 +130,15 @@ tr:hover td{background:rgba(255,255,255,.03)}
 @media(max-width:1000px){.two{grid-template-columns:1fr}}
 .scroll{max-height:520px;overflow:auto}
 
+.tgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:14px}
+.tslot{border:1px solid var(--line);border-radius:16px;padding:14px;background:linear-gradient(160deg,rgba(255,255,255,.05),rgba(255,255,255,.01))}
+.tslot h4{margin:0 0 10px;font-size:13px;color:var(--orange2);text-transform:uppercase;letter-spacing:1.5px}
+.tline{display:grid;grid-template-columns:58px 1fr 46px 40px 40px;gap:6px;align-items:center;margin-bottom:6px}
+.tline.main{padding-bottom:10px;margin-bottom:10px;border-bottom:1px dashed var(--line)}
+.tline label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:1px}
+.tline input{padding:7px 6px;border-radius:10px;border:1px solid var(--line);background:rgba(0,0,0,.3);color:var(--text);font-size:12px;min-width:0;width:100%}
+.tline input:focus{border-color:var(--orange);outline:none}
+.thead{display:grid;grid-template-columns:58px 1fr 46px 40px 40px;gap:6px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px}
 .danger-box{border:1px solid rgba(225,29,72,.45);background:linear-gradient(135deg,rgba(225,29,72,.14),rgba(225,29,72,.03));border-radius:16px;padding:20px}
 
 #toasts{position:fixed;right:20px;bottom:20px;display:flex;flex-direction:column;gap:10px;z-index:9}
@@ -140,6 +149,16 @@ tr:hover td{background:rgba(255,255,255,.03)}
 ::-webkit-scrollbar{width:8px;height:8px}::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:8px}
 .empty{color:var(--muted);text-align:center;padding:40px 10px}
 </style>
+<script>
+// Inside the control panel (panel.html) this page runs embedded: no own header or backdrop, the panel's tabs are at the top.
+if (new URLSearchParams(location.search).has('embed')) document.documentElement.classList.add('embed');
+</script>
+<style>
+html.embed body{background:transparent}
+html.embed .bg{display:none}
+html.embed .wrap{padding-top:18px}
+</style>
+<style>html.embed header{display:none}</style>
 </head>
 <body>
 <div class="bg"><div class="orb a"></div><div class="orb b"></div><div class="orb c"></div></div>
@@ -165,6 +184,7 @@ tr:hover td{background:rgba(255,255,255,.03)}
         <button class="tab" data-v="give">🎁 Give</button>
         <button class="tab" data-v="bulk">📦 Give everything</button>
         <button class="tab" data-v="inv">🎒 Inventory</button>
+        <button class="tab" data-v="team">🛡️ Team editor</button>
         <button class="tab" data-v="danger">⚠️ Reset</button>
       </nav>
 
@@ -223,6 +243,19 @@ tr:hover td{background:rgba(255,255,255,.03)}
         </div>
       </section>
 
+      <section class="panel view" id="v-team">
+        <div class="row" style="justify-content:space-between;align-items:flex-start;margin-bottom:6px">
+          <div><h3>Team editor</h3>
+            <p class="hint" style="margin:0">Pick every ninja and every piece of gear, set levels, then press <b>Apply team</b> once. Type in a box to search:
+              <b>★ owned</b> cards come first, <b>＋ New</b> ones are created for the player. Leave a box empty for nothing.</p></div>
+          <div class="row"><span class="tag" id="tpower">⚔️ -</span><button class="btn ghost sm" onclick="maxAll()">Everything max</button>
+            <button class="btn ghost sm" onclick="loadTeam()">Reload</button><button class="btn" onclick="applyTeam()">✅ Apply team</button></div>
+        </div>
+        <p class="hint" id="tinfo"></p>
+        <div class="tgrid" id="tgrid"></div>
+        <div id="tlists"></div>
+      </section>
+
       <section class="panel view" id="v-danger">
         <div class="danger-box">
           <h3>Reset this player</h3>
@@ -255,8 +288,10 @@ let players = [], sel = null, cat = '', stars = 0, inv = { cards: [], props: [] 
 
 async function loadPlayers() {
   players = await api('players');
-  if (!sel && players.length) sel = players[0].uid;
+  const first = !sel && players.length;
+  if (first) sel = players[0].uid;
   renderPlayers(); renderHero();
+  if (first && $('v-team').classList.contains('on')) loadTeam();
 }
 function renderPlayers() {
   const q = $('pq').value.toLowerCase();
@@ -265,7 +300,7 @@ function renderPlayers() {
     '<div style="min-width:0"><div class="pname">' + esc(p.nick) + (p.vip ? '<span class="vip">VIP ' + p.vip + '</span>' : '') + '</div>' +
     '<div class="pmeta">Lv ' + p.level + ' · ' + fmt(p.gold) + ' gold · #' + p.uid + '</div></div></div>').join('') || '<div class="empty">No players yet</div>';
 }
-function pick(uid) { sel = uid; renderPlayers(); renderHero(); if ($('v-inv').classList.contains('on')) loadInv(); }
+function pick(uid) { sel = uid; renderPlayers(); renderHero(); if ($('v-inv').classList.contains('on')) loadInv(); if ($('v-team').classList.contains('on')) loadTeam(); }
 function current() { return players.find((p) => p.uid === sel); }
 function renderHero() {
   const p = current();
@@ -344,6 +379,78 @@ async function saveCard(seq) {
   const r = await api('setcard', { uid: sel, seq, level: +$('lv-' + seq).value, newlife: +$('nl-' + seq).value, growth: +$('gr-' + seq).value });
   toast(r.ok ? 'Saved: level ' + r.level + ', rebirth ' + r.newlife + (r.growth != null ? ', growth ' + r.growth : '') + '<br><small>Restart the game to see it.</small>' : r.error, r.ok); loadInv();
 }
+// ---- team editor ----
+const KINDS = [[1, 'Weapon', 2], [2, 'Armor', 3], [3, 'Trinket', 4], [4, 'Seal', 5], [5, 'Jutsu 1', 6], [6, 'Jutsu 2', 6], [7, 'Jutsu 3', 6], [8, 'Jutsu 4', 6]];
+let team = null, picks = {}, catCache = null;
+async function catalogs() {
+  if (catCache) return catCache;
+  const [n, e, s, j] = await Promise.all(['ninja', 'equip', 'seal', 'ninjutsu'].map((c) => api('catalog?all=1&cat=' + c)));
+  catCache = { 1: n.items, 2: e.items.filter((x) => x.sub === 'Weapon'), 3: e.items.filter((x) => x.sub === 'Armor'), 4: e.items.filter((x) => x.sub === 'Trinket'), 5: s.items, 6: j.items };
+  return catCache;
+}
+const ownLabel = (c) => '★ ' + c.name + ' · Lv ' + c.level + (c.newlife ? ' · R' + c.newlife : '') + (c.growth ? ' · G' + c.growth : '') + ' · #' + c.seq;
+const newLabel = (x) => '＋ New ' + x.name + ' ' + '★'.repeat(x.stars || 0) + (x.sub && x.cat !== 'equip' ? ' (' + x.sub + ')' : '') + ' [' + x.id + ']';
+async function loadTeam() {
+  if (!sel) return;
+  const [t, cats] = await Promise.all([api('team?uid=' + sel), catalogs()]);
+  team = t; picks = {};
+  let lists = '';
+  for (const type of [1, 2, 3, 4, 5, 6]) {
+    const opts = [];
+    for (const c of team.owned[type] || []) { const l = ownLabel(c); picks[type + '|' + l] = { seq: c.seq }; opts.push(l); }
+    for (const x of cats[type] || []) { const l = newLabel(x); picks[type + '|' + l] = { give: x.id }; opts.push(l); }
+    lists += '<datalist id="dl' + type + '">' + opts.map((o) => '<option value="' + esc(o) + '">').join('') + '</datalist>';
+  }
+  $('tlists').innerHTML = lists;
+  $('tpower').textContent = '⚔️ ' + team.power.attack + '  🛡️ ' + team.power.defense;
+  $('tinfo').innerHTML = '<b>' + team.max + '</b> team slots are open at this player\'s level. Cards show in the game after it is closed completely and opened again.';
+  const line = (cls, label, id, type, c, isNinja) => '<div class="tline ' + cls + '"><label>' + label + '</label>' +
+    '<input list="dl' + type + '" id="' + id + '" value="' + (c ? esc(ownLabel(c)) : '') + '" placeholder="(none)">' +
+    '<input type="number" id="' + id + '-lv" min="1" max="50" value="' + (c ? c.level : 50) + '" title="level">' +
+    '<input type="number" id="' + id + '-nl" min="0" max="' + (isNinja ? 8 : 3) + '" value="' + (c ? c.newlife : 0) + '" title="rebirth"' + (type <= 4 ? '' : ' disabled') + '>' +
+    (isNinja ? '<input type="number" id="' + id + '-gr" min="0" max="15" value="' + (c ? c.growth : 0) + '" title="growth">' : '<span></span>') + '</div>';
+  let html = '';
+  for (let i = 0; i < team.max; i++) {
+    const s = team.slots[i] || { ninja: null, equip: {} };
+    html += '<div class="tslot"><h4>Slot ' + (i + 1) + '</h4><div class="thead"><span></span><span>card</span><span>level</span><span>rebirth</span><span>growth</span></div>' +
+      line('main', 'Ninja', 't' + i + 'n', 1, s.ninja, true) +
+      KINDS.map(([k, name, type]) => line('', name, 't' + i + 'k' + k, type, s.equip[k], false)).join('') + '</div>';
+  }
+  $('tgrid').innerHTML = html;
+}
+function pickOf(type, id) {
+  const v = $(id).value.trim();
+  if (!v) return null;
+  const p = picks[type + '|' + v];
+  if (!p) throw new Error('"' + v + '" is not in the list: pick one of the suggestions');
+  return p;
+}
+async function applyTeam() {
+  if (!team) return;
+  let slots;
+  try {
+    slots = [];
+    for (let i = 0; i < team.max; i++) {
+      const ninja = pickOf(1, 't' + i + 'n');
+      if (!ninja) continue;
+      const equip = {};
+      for (const [k, , type] of KINDS) {
+        const e = pickOf(type, 't' + i + 'k' + k);
+        if (e) equip[k] = { ...e, level: +$('t' + i + 'k' + k + '-lv').value || 1, newlife: +$('t' + i + 'k' + k + '-nl').value || 0 };
+      }
+      slots.push({ ninja, level: +$('t' + i + 'n-lv').value || 1, newlife: +$('t' + i + 'n-nl').value || 0, growth: +$('t' + i + 'n-gr').value || 0, equip });
+    }
+  } catch (e) { return toast(esc(e.message), false); }
+  if (!slots.length) return toast('Pick at least one ninja', false);
+  const r = await api('setteam', { uid: sel, slots });
+  if (!r.ok) return toast(esc(r.error), false);
+  toast('Team applied!<br><small>⚔️ ' + r.power.attack + ' · 🛡️ ' + r.power.defense + '<br>Close the game completely and open it again to see it.</small>');
+  loadTeam(); loadPlayers();
+}
+function maxAll() {
+  document.querySelectorAll('#tgrid input[type=number]').forEach((x) => { if (!x.disabled) x.value = x.max; });
+  toast('All levels set to max. Press Apply team to save.');
+}
 async function delCard(seq) {
   if (!confirm('Remove this card from ' + current().nick + '?')) return;
   const r = await api('delcard', { uid: sel, seq }); toast(r.ok ? 'Card removed' : r.error, r.ok); loadInv(); loadPlayers();
@@ -360,9 +467,16 @@ document.querySelector('.tabs').onclick = (e) => {
   document.querySelectorAll('.tab').forEach((x) => x.classList.toggle('on', x === b));
   document.querySelectorAll('.view').forEach((v) => v.classList.toggle('on', v.id === 'v-' + b.dataset.v));
   if (b.dataset.v === 'inv') loadInv();
+  if (b.dataset.v === 'team') loadTeam();
 };
 // drifting leaves
 for (let i = 0; i < 14; i++) { const l = document.createElement('div'); l.className = 'leaf'; l.textContent = ['🍃', '🍥', '✦'][i % 3]; l.style.left = Math.random() * 100 + 'vw'; l.style.animationDuration = 14 + Math.random() * 18 + 's'; l.style.animationDelay = -Math.random() * 30 + 's'; document.querySelector('.bg').appendChild(l); }
+// the control panel asks for a tab (Players & items = Resources, Team builder = Team editor)
+window.addEventListener('message', (e) => {
+  if (e.origin !== location.origin || !e.data || !e.data.tab) return;
+  const b = document.querySelector('.tab[data-v="' + e.data.tab + '"]');
+  if (b) b.click();
+});
 loadPlayers(); search();
 setInterval(loadPlayers, 15000);
 </script>

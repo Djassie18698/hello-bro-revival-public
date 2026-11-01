@@ -29,6 +29,7 @@ try {
 } catch (e) { console.error('backup failed', e.message); }
 const db = new DatabaseSync(process.env.DB || 'hellobro.db');
 require('./schema')(db);
+require('./consumption').ensure(db); // gold-spending log (trigger) for the spending event
 
 function parseBody(req) {
   return new Promise((res) => {
@@ -70,6 +71,10 @@ const httpServer = http.createServer({ insecureHTTPParser: true }, async (req, r
     if (!file.startsWith(path.join(__dirname, 'cdn')) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) { resp.writeHead(404); return resp.end(); }
     resp.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': fs.statSync(file).size });
     return fs.createReadStream(file).pipe(resp);
+  }
+  if (u.pathname === '/' || u.pathname === '/panel') { // the control panel
+    if (!admin.authorized(req)) { resp.writeHead(401, { 'WWW-Authenticate': 'Basic realm="Hello Bro"' }); return resp.end('password required'); }
+    return admin.panel(resp, 'server');
   }
   if (u.pathname === '/manager' || u.pathname.startsWith('/manager/')) {
     try { return await manager(req, resp, u, db, parseBody); } catch (e) { logError('manager error', e); resp.writeHead(500); return resp.end('error'); }

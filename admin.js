@@ -97,14 +97,87 @@ function cardName(type, id) {
 }
 
 let pageCache = null;
+// ---- Team editor: the whole team (ninjas + their 8 gear slots) in one go ------------------------------------------------
+// equipped.kind: 1 weapon (card type 2), 2 armor (3), 3 trinket (4), 4 seal (5), 5-8 ninjutsu (6). equipped.slot = team position + 1.
+const KIND_TYPE = { 1: 2, 2: 3, 3: 4, 4: 5, 5: 6, 6: 6, 7: 6, 8: 6 };
+const TYPE_CAT = { 1: 'ninja', 2: 'equip', 3: 'equip', 4: 'equip', 5: 'seal', 6: 'ninjutsu' };
+const cardInfo = (c) => c && { seq: c.seq, type: c.type, id: c.ninja_id, name: cardName(c.type, c.ninja_id), level: c.level, newlife: c.newlife || 0, growth: c.starlevel || 0 };
+function teamView(db, pl) {
+  game.ensure(db);
+  const cards = db.prepare('SELECT * FROM cards WHERE uid=? AND server_id=? ORDER BY level DESC, seq').all(pl.uid, pl.server_id);
+  const bySeq = new Map(cards.map((c) => [c.seq, c]));
+  const team = db.prepare('SELECT seq FROM team WHERE uid=? AND server_id=? ORDER BY slot').all(pl.uid, pl.server_id);
+  const eq = db.prepare('SELECT slot, kind, seq FROM equipped WHERE uid=? AND server_id=?').all(pl.uid, pl.server_id);
+  const slots = team.map((t, i) => ({
+    ninja: cardInfo(bySeq.get(t.seq)),
+    equip: Object.fromEntries([1, 2, 3, 4, 5, 6, 7, 8].map((k) => { const e = eq.find((x) => x.slot === i + 1 && x.kind === k); return [k, e ? cardInfo(bySeq.get(e.seq)) : null]; })),
+  }));
+  const owned = {};
+  for (const c of cards) (owned[c.type] = owned[c.type] || []).push(cardInfo(c));
+  const t = game.teamStats(db, pl.uid, pl.server_id).total;
+  return { max: game.maxTeam(db, pl), slots, owned, power: { attack: `${t.al}-${t.ah}`, defense: `${t.dl}-${t.dh}` } };
+}
+// slots: [{ ninja: { seq } | { give: id }, level, newlife, growth, equip: { kind: { seq } | { give: id }, level, newlife } | null }]
+function applyTeam(db, pl, slots) {
+  game.ensure(db);
+  const max = game.maxTeam(db, pl);
+  const list = (Array.isArray(slots) ? slots : []).filter((s) => s && s.ninja).slice(0, max);
+  const own = (seq, type) => db.prepare('SELECT * FROM cards WHERE seq=? AND uid=? AND server_id=? AND type=?').get(Number(seq), pl.uid, pl.server_id, type);
+  const used = new Set();
+  const resolve = (pick, type, kindForEquip) => {
+    if (!pick) return 0;
+    if (pick.seq) { const c = own(pick.seq, type); if (!c) throw new Error('a picked card is not owned any more'); if (used.has(c.seq)) throw new Error(cardName(c.type, c.ninja_id) + ' is picked twice'); return c.seq; }
+    const id = Math.trunc(Number(pick.give));
+    if (!id) return 0;
+    const seq = type === 1 ? game.giveCard(db, pl.uid, pl.server_id, id) : type <= 4 ? game.giveEquip(db, pl.uid, pl.server_id, id) : game.giveCard(db, pl.uid, pl.server_id, id, type);
+    if (!seq) throw new Error('could not create card #' + id);
+    const got = db.prepare('SELECT type FROM cards WHERE seq=?').get(seq).type;
+    if (got !== type) { db.prepare('DELETE FROM cards WHERE seq=?').run(seq); throw new Error('that item does not fit the ' + (['', '', 'weapon', 'armor', 'trinket'][type] || 'chosen') + ' slot'); }
+    return seq;
+  };
+  db.exec('BEGIN');
+  try {
+    db.prepare('DELETE FROM team WHERE uid=? AND server_id=?').run(pl.uid, pl.server_id);
+    db.prepare('DELETE FROM equipped WHERE uid=? AND server_id=?').run(pl.uid, pl.server_id);
+    list.forEach((s, i) => {
+      const seq = resolve(s.ninja, 1);
+      used.add(seq);
+      setCard(db, seq, clampCard('ninja', s.level, s.newlife, s.growth));
+      db.prepare('INSERT INTO team(uid,server_id,slot,seq) VALUES(?,?,?,?)').run(pl.uid, pl.server_id, i, seq);
+      for (const k of [1, 2, 3, 4, 5, 6, 7, 8]) {
+        const e = s.equip && s.equip[k];
+        if (!e || (!e.seq && !e.give)) continue;
+        const type = KIND_TYPE[k], eseq = resolve(e, type);
+        if (!eseq) continue;
+        used.add(eseq);
+        setCard(db, eseq, clampCard(TYPE_CAT[type], e.level, e.newlife, 0));
+        db.prepare('INSERT INTO equipped(uid,server_id,slot,kind,seq) VALUES(?,?,?,?,?)').run(pl.uid, pl.server_id, i + 1, k, eseq);
+      }
+    });
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    return { ok: false, error: e.message };
+  }
+  return { ok: true, ...teamView(db, pl) };
+}
+
+// The control panel (panel.html): one page with tabs (Server / Players & items / Team builder) that embeds /manager and /admin.
+function panel(res, start) {
+  const page = fs.readFileSync(path.join(__dirname, 'panel.html'), 'utf8').replace('<body>', `<body data-start="${start}">`);
+  res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+  res.end(page);
+}
+
 module.exports = async function admin(req, res, u, db, readBody) {
   if (!authorized(req)) {
     res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="Hello Bro admin"' });
     return res.end('password required');
   }
+  if ((u.pathname === '/admin' || u.pathname === '/admin/') && !u.query.embed) return panel(res, 'admin');
   if (u.pathname === '/admin' || u.pathname === '/admin/') {
     if (!pageCache || process.env.HB_DEBUG) pageCache = fs.readFileSync(path.join(__dirname, 'admin.html'), 'utf8');
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
     return res.end(pageCache);
   }
   game.ensure(db);
@@ -116,7 +189,11 @@ module.exports = async function admin(req, res, u, db, readBody) {
   if (u.pathname === '/admin/api/catalog') {
     const q = String(u.query.q || '').toLowerCase(), cat = String(u.query.cat || ''), stars = Number(u.query.stars) || 0;
     const list = catalog().filter((x) => (!cat || x.cat === cat) && (!stars || x.stars === stars) && (!q || x.name.toLowerCase().includes(q)));
-    return json(res, { total: list.length, items: list.slice(0, 300) });
+    return json(res, { total: list.length, items: u.query.all ? list : list.slice(0, 300) });
+  }
+  if (u.pathname === '/admin/api/team') {
+    const pl = db.prepare('SELECT * FROM players WHERE uid=?').get(Number(u.query.uid));
+    return json(res, pl ? teamView(db, pl) : { max: 0, slots: [], owned: {} });
   }
   if (u.pathname === '/admin/api/inventory') {
     const pl = db.prepare('SELECT * FROM players WHERE uid=?').get(Number(u.query.uid));
@@ -172,6 +249,7 @@ module.exports = async function admin(req, res, u, db, readBody) {
       setCard(db, card.seq, c);
       return json(res, { ok: true, level: c.lv, newlife: c.nl, growth: c.gr });
     }
+    if (u.pathname === '/admin/api/setteam') return json(res, applyTeam(db, pl, b.slots));
     if (u.pathname === '/admin/api/setprop') { // set the exact amount of one item / fragment / souls
       const id = Math.trunc(Number(b.id)), n = Math.max(0, Math.min(Math.trunc(Number(b.count)) || 0, 999999999));
       if (!id) return json(res, { ok: false, error: 'bad item' });
@@ -201,3 +279,4 @@ module.exports = async function admin(req, res, u, db, readBody) {
 };
 
 module.exports.authorized = authorized;
+module.exports.panel = panel;

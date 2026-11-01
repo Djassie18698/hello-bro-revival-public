@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hello Bro Control Panel</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bangers&family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0b0a14;--panel:rgba(24,22,40,.72);--line:rgba(255,255,255,.08);--text:#f3f1ff;--muted:#a39fc0;--orange:#ff8a1f;--orange2:#ffb648;--red:#ff3d5a;--green:#34d399}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font-family:Inter,system-ui,sans-serif;overflow:hidden}
+.bg{position:fixed;inset:0;z-index:-1;overflow:hidden;background:radial-gradient(1200px 700px at 10% -10%,#3b1d5c 0%,transparent 60%),radial-gradient(900px 600px at 110% 10%,#5c2a0f 0%,transparent 55%),var(--bg)}
+.orb{position:absolute;border-radius:50%;filter:blur(70px);opacity:.5;animation:float 18s ease-in-out infinite}
+.orb.a{width:420px;height:420px;background:#ff7a18;left:-120px;top:40%}
+.orb.b{width:520px;height:520px;background:#7c3aed;right:-160px;top:-120px;animation-delay:-6s}
+.orb.c{width:300px;height:300px;background:#06b6d4;left:45%;bottom:-140px;animation-delay:-12s}
+@keyframes float{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(40px,-30px) scale(1.12)}}
+.top{display:flex;align-items:center;gap:18px;padding:16px 24px;border-bottom:1px solid var(--line);background:rgba(11,10,20,.55);backdrop-filter:blur(16px);flex-wrap:wrap}
+.logo{width:50px;height:50px;border-radius:16px;display:grid;place-items:center;font-size:28px;background:linear-gradient(135deg,var(--orange),var(--red));box-shadow:0 10px 40px rgba(255,90,40,.45);animation:spin 12s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+h1{font-family:Bangers,Impact,sans-serif;font-size:36px;letter-spacing:2px;margin:0;line-height:1;background:linear-gradient(90deg,#fff 0%,var(--orange2) 45%,var(--orange) 70%,#ff5f6d 100%);-webkit-background-clip:text;background-clip:text;color:transparent}
+nav{display:flex;gap:8px;margin-left:24px;flex-wrap:wrap}
+nav a{padding:12px 20px;border-radius:14px;border:1px solid var(--line);background:var(--panel);color:var(--muted);font-weight:800;font-size:15px;text-decoration:none;transition:.18s;cursor:pointer}
+nav a:hover{color:var(--text);transform:translateY(-2px)}
+nav a.on{color:#1a0f02;background:linear-gradient(135deg,var(--orange2),var(--orange));border-color:transparent;box-shadow:0 10px 30px rgba(255,138,31,.35)}
+.right{margin-left:auto;display:flex;gap:10px;align-items:center}
+.pill{display:flex;gap:8px;align-items:center;font-size:12px;color:var(--muted);background:var(--panel);border:1px solid var(--line);padding:9px 14px;border-radius:999px;text-decoration:none}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--green);box-shadow:0 0 12px var(--green);animation:pulse 2s infinite}
+.dot.off{background:var(--red);box-shadow:0 0 12px var(--red)}
+@keyframes pulse{50%{opacity:.35}}
+main{position:absolute;top:83px;left:0;right:0;bottom:0}
+iframe{position:absolute;inset:0;width:100%;height:100%;border:0;background:transparent;display:none}
+iframe.on{display:block}
+@media(max-width:800px){main{top:150px}nav{margin-left:0}h1{font-size:28px}}
+</style>
+</head>
+<body>
+<div class="bg"><div class="orb a"></div><div class="orb b"></div><div class="orb c"></div></div>
+<div class="top" id="top">
+  <div class="logo">🍥</div>
+  <h1>HELLO BRO</h1>
+  <nav>
+    <a data-t="server">🖥️ Server</a>
+    <a data-t="admin">🎁 Players &amp; items</a>
+    <a data-t="team">🛡️ Team builder</a>
+  </nav>
+  <div class="right">
+    <a class="pill" href="https://discord.gg/2Cbp4UDHrU" target="_blank">💬 Discord</a>
+    <span class="pill"><span class="dot" id="dot"></span><span id="state">Server online</span></span>
+  </div>
+</div>
+<main>
+  <iframe id="f-server" title="Server" allowtransparency="true"></iframe>
+  <iframe id="f-admin" title="Players and items" allowtransparency="true"></iframe>
+</main>
+<script>
+// One site, three tabs. The Server Manager and the admin page load once (embedded, without their own headers) and stay loaded,
+// so switching tabs keeps your place. "Team builder" is the admin page's Team editor tab.
+const frames = { server: document.getElementById('f-server'), admin: document.getElementById('f-admin') };
+const src = { server: '/manager?embed=1', admin: '/admin?embed=1' };
+function show(t) {
+  if (!['server', 'admin', 'team'].includes(t)) t = 'server';
+  const f = t === 'server' ? 'server' : 'admin';
+  if (!frames[f].src) frames[f].src = src[f];
+  for (const k in frames) frames[k].classList.toggle('on', k === f);
+  document.querySelectorAll('nav a').forEach((a) => a.classList.toggle('on', a.dataset.t === t));
+  const tab = t === 'team' ? 'team' : t === 'admin' ? 'res' : null;
+  if (tab) {
+    const go = () => frames.admin.contentWindow.postMessage({ tab }, location.origin);
+    if (frames.admin.dataset.ready) go(); else frames.admin.onload = () => { frames.admin.dataset.ready = 1; go(); };
+  }
+  if (location.hash !== '#' + t) history.replaceState(null, '', '#' + t);
+}
+document.querySelector('nav').onclick = (e) => { const a = e.target.closest('a'); if (a) show(a.dataset.t); };
+window.addEventListener('message', (e) => { if (e.origin === location.origin && e.data && e.data.goto) show(e.data.goto); });
+show(location.hash.slice(1) || document.body.dataset.start || 'server');
+// online dot
+setInterval(async () => {
+  let ok = true;
+  try { await fetch('/manager/api/status', { cache: 'no-store' }); } catch { ok = false; }
+  document.getElementById('dot').classList.toggle('off', !ok);
+  document.getElementById('state').textContent = ok ? 'Server online' : 'Server offline';
+}, 4000);
+</script>
+</body>
+</html>

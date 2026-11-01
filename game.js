@@ -551,7 +551,7 @@ function actXml(db, pl) {
   return `<activity type="1" loginallnum="${c.days}"><item actid="1">${subs(c.login)}</item></activity>` +
     `<activity type="2"><item actid="2">${subs(c.up)}</item></activity><activity type="3"><item actid="3" pos="-1"></item></activity><activity type="4"><item actid="4"></item></activity>` +
     // Events switched off in the Server Manager are left out of the list, so their button / Event menu line disappears.
-    '<conf><items>' + settings.EVENTS.filter((e) => e.id !== 31 && settings.eventOn(db, e.id)).map(({ id, pos, type }) => `<item><id>${id}</id><pos>${pos}</pos><status>1</status><onoff>1</onoff><type>${type}</type></item>`).join('') +
+    '<conf><items>' + [...new Map(settings.EVENTS.filter((e) => e.id !== 31 && settings.eventOn(db, e.id)).map((e) => [e.screen || e.id, { ...e, id: e.screen || e.id }])).values()].map(({ id, pos, type }) => `<item><id>${id}</id><pos>${pos}</pos><status>1</status><onoff>1</onoff><type>${type}</type></item>`).join('') +
     `<item><id>31</id><pos>10</pos><status>1</status><onoff>0</onoff><type>1</type><timeleft>${!settings.eventOn(db, 31) || db.prepare('SELECT 1 FROM stagegift WHERE uid=? AND server_id=?').get(pl.uid, pl.server_id) ? 0 : 315360000}</timeleft></item>` + '</items><xiaoopen>1</xiaoopen><gambletype>1</gambletype></conf>';
 }
 // What the pack screens show comes from the client's own Lua tables (loginPackData / upgradePackData, 1-4 dropinfo ids each):

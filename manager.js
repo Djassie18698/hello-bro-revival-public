@@ -54,9 +54,10 @@ module.exports = async function manager(req, res, u, db, readBody) {
     return res.end('password required');
   }
   const port = req.socket.localPort;
+  if ((u.pathname === '/manager' || u.pathname === '/manager/') && !u.query.embed) return require('./admin').panel(res, 'server');
   if (u.pathname === '/manager' || u.pathname === '/manager/') {
     if (!pageCache || process.env.HB_DEBUG) pageCache = fs.readFileSync(path.join(__dirname, 'manager.html'), 'utf8');
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
     return res.end(pageCache);
   }
   if (u.pathname === '/manager/api/status') return json(res, status(db, port));
@@ -68,7 +69,7 @@ module.exports = async function manager(req, res, u, db, readBody) {
   let b = {};
   try { b = JSON.parse((await readBody(req)) || '{}'); } catch { return json(res, { ok: false, error: 'bad json' }); }
   if (u.pathname === '/manager/api/event') {
-    const e = settings.EVENTS.find((x) => x.id === Number(b.id));
+    const e = settings.EVENTS.find((x) => String(x.id) === String(b.id));
     if (!e) return json(res, { ok: false, error: 'no such event' });
     settings.setEvent(db, e.id, !!b.on);
     console.log(`[manager] event "${e.name}" switched ${b.on ? 'ON' : 'OFF'}`);
