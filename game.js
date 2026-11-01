@@ -1,5 +1,6 @@
 // Game-state helpers: cards (characters), teams, starter grants. Data tables live in ./data/*.json
 const fs = require('fs');
+const settings = require('./settings');
 const path = require('path');
 
 const table = (name) => JSON.parse(fs.readFileSync(path.join(__dirname, 'data', name + '.json'), 'utf8'));
@@ -36,6 +37,9 @@ function ensure(db) {
     );
     CREATE INDEX IF NOT EXISTS cards_owner ON cards(uid, server_id);
   `);
+  try { db.exec('ALTER TABLE players ADD COLUMN sp INTEGER NOT NULL DEFAULT -1'); } catch {}
+  try { db.exec('ALTER TABLE players ADD COLUMN energy_t INTEGER NOT NULL DEFAULT 0'); } catch {}
+  try { db.exec('ALTER TABLE players ADD COLUMN sp_t INTEGER NOT NULL DEFAULT 0'); } catch {}
   try { db.exec('ALTER TABLE players ADD COLUMN vip INTEGER NOT NULL DEFAULT 0'); } catch {}
   try { db.exec('ALTER TABLE players ADD COLUMN vipexp INTEGER NOT NULL DEFAULT 0'); } catch {}
   try { db.exec('ALTER TABLE cards ADD COLUMN newlife INTEGER NOT NULL DEFAULT 0'); } catch (e) { /* already there */ }
@@ -80,8 +84,9 @@ function giveEquip(db, uid, sid, equipId) {
   if (!e) return 0;
   return giveCard(db, uid, sid, equipId, SLOT_TYPE[e[3]] || 2);
 }
-function randomEquip(slot, minStar = 3) {
-  const pool = equipRows().filter((r) => r[3] === slot && r[5] === 1 && r[6] >= minStar);
+function randomEquip(slot, minStar = 3, maxStar = 5) {
+  let pool = equipRows().filter((r) => r[3] === slot && r[5] === 1 && r[6] >= minStar && r[6] <= maxStar);
+  if (!pool.length) pool = equipRows().filter((r) => r[5] === 1 && r[6] >= minStar && r[6] <= maxStar);
   return pool[Math.floor(Math.random() * pool.length)][0];
 }
 
@@ -101,7 +106,9 @@ function slotXml(seq, slot, eq = {}, st = {}) {
     ninjintsu1seq: eq[5] || 0, ninjintsu2seq: eq[6] || 0, ninjintsu3seq: eq[7] || 0, ninjintsu4seq: eq[8] || 0,
     attacklow: st.al || 10, attackhigh: st.ah || 20, defenselow: st.dl || 5, defensehigh: st.dh || 10, chakralow: st.cl || 10, chakrahigh: st.ch || 20, skillsuit: 0 };
   return '<ninja>' + Object.entries(f).map(([k, v]) => el(k, v)).join('') +
-    '<combinlist></combinlist><readycombinlist></readycombinlist></ninja>';
+    // the card detail screen paints a chain red when its id is in <combinlist> (CNinjaDetailView::SetCombin); readycombinlist = a partner is owned but not in the team
+    `<combinlist>${(st.active || []).map((id) => `<combin><combinid>${id}</combinid></combin>`).join('')}</combinlist>` +
+    `<readycombinlist>${(st.ready || []).map((id) => `<combin><combinid>${id}</combinid></combin>`).join('')}</readycombinlist></ninja>`;
 }
 
 // Equip (kind 1 weapon, 2 armor, 3 trinket, 4 seal, 5-8 ninjutsu slots) a card onto the ninja in team slot (1-based).
@@ -159,10 +166,10 @@ function stateXml(db, uid, sid) {
 // ---- Gacha ("recruit") -----------------------------------------------------------------
 // Pull types follow recruitinfo.dbf rows: 1 = premium (300 gold), 2 = standard (150 gold), 3 = free.
 // Star weights are a hobby-server design choice (the original rates lived on the old server).
-const RATES = {
-  1: { 6: 2, 5: 12, 4: 36, 3: 50 },
-  2: { 5: 4, 4: 20, 3: 46, 2: 30 },
-  3: { 4: 5, 3: 25, 2: 40, 1: 30 },
+const RATES = { // star weights per banner; the stars must stay inside what each banner promises (purple 4-5, blue 3-5, green 2-5). Weights (ours).
+  1: { 5: 12, 4: 88 },
+  2: { 5: 4, 4: 26, 3: 70 },
+  3: { 5: 1, 4: 5, 3: 30, 2: 64 },
 };
 const COST = { 1: 300, 2: 150, 3: 0 };
 const TEN_COST = { 1: 2800, 2: 1400, 3: 0 };
@@ -174,25 +181,64 @@ function pools() {
   }
   return byStar;
 }
-function rollOne(type) {
+function rollOne(type, forceStar) {
   try { const f = Number(fs.readFileSync(path.join(__dirname, 'force_ninja.txt'), 'utf8')); if (f) return f; } catch {} // debugging aid
   const rates = RATES[type] || RATES[2];
   const total = Object.values(rates).reduce((a, b) => a + b, 0);
   let x = Math.random() * total;
   let star = Number(Object.keys(rates)[0]);
   for (const [s, w] of Object.entries(rates)) { if ((x -= w) < 0) { star = Number(s); break; } }
+  if (forceStar) star = Math.max(star, forceStar);
   const pool = pools()[star] || pools()[3];
   return pool[Math.floor(Math.random() * pool.length)];
 }
+// Free recruits (owner/friend: in the original the blue 150-gold recruit was free once every 8 hours and the purple 300-gold one once every 24).
+const FREE_EVERY = { 1: 24 * 3600, 2: 8 * 3600 };
+// Pity counter ("recruit N more times and you are sure to get a 5-star"): the original number is lost, so (ours) = 20 pulls.
+const PITY = 20;
+function recruitEnsure(db) {
+  db.exec('CREATE TABLE IF NOT EXISTS recruit_state (uid INTEGER, server_id INTEGER, type INTEGER, last_free INTEGER DEFAULT 0, pity INTEGER DEFAULT 0, PRIMARY KEY(uid, server_id, type))');
+  try { db.exec("ALTER TABLE recruit_state ADD COLUMN day TEXT DEFAULT ''"); } catch (e) { /* already there */ }
+  try { db.exec('ALTER TABLE recruit_state ADD COLUMN used INTEGER DEFAULT 0'); } catch (e) { /* already there */ }
+}
+function recruitState(db, pl, type) {
+  recruitEnsure(db);
+  const r = db.prepare('SELECT * FROM recruit_state WHERE uid=? AND server_id=? AND type=?').get(pl.uid, pl.server_id, type) || { last_free: 0, pity: 0 };
+  const every = FREE_EVERY[type] || 0, now = Math.floor(Date.now() / 1000);
+  return { every, last: r.last_free, left: every ? Math.max(0, r.last_free + every - now) : 0, pity: r.pity, toGo: Math.max(1, PITY - r.pity) };
+}
+// The "1 in 100" recruit (type 3) costs recruitment orders (prop 30), one per card, at most recruitinfo [5] = 5 cards a day.
+const ORDER_PROP = 30, ORDER_DAILY = 5;
+function orderUsedToday(db, pl) {
+  recruitEnsure(db);
+  const r = db.prepare('SELECT day, used FROM recruit_state WHERE uid=? AND server_id=? AND type=3').get(pl.uid, pl.server_id);
+  return r && r.day === today() ? r.used : 0;
+}
 function pull(db, pl, type, count, free) {
+  if (type === 3) {
+    if (orderUsedToday(db, pl) + count > ORDER_DAILY) return { error: 'no recruits left today' };
+    if ((propCounts(db, pl.uid, pl.server_id)[ORDER_PROP] || 0) < count) return { error: 'not enough recruitment orders' };
+    propAdd(db, pl.uid, pl.server_id, ORDER_PROP, -count);
+    db.prepare(`INSERT INTO recruit_state(uid,server_id,type,day,used) VALUES(?,?,3,?,?)
+      ON CONFLICT(uid,server_id,type) DO UPDATE SET day=excluded.day, used=excluded.used`).run(pl.uid, pl.server_id, today(), orderUsedToday(db, pl) + count);
+    free = false;
+  }
+  const st = recruitState(db, pl, type);
+  if (free && st.left > 0) return { error: 'free recruit not ready yet' };
   const cost = free ? 0 : count === 10 ? (TEN_COST[type] ?? 1400) : (COST[type] ?? 150) * count; // ten-pull prices are the ones the client shows
   if (pl.gold < cost) return { error: 'not enough gold' };
   db.prepare('UPDATE players SET gold=gold-? WHERE uid=? AND server_id=?').run(cost, pl.uid, pl.server_id);
+  let pity = st.pity;
   const got = [];
   for (let i = 0; i < count; i++) {
-    const nid = process.env.HB_FORCE ? Number(process.env.HB_FORCE) : rollOne(type);
+    const sure = FREE_EVERY[type] && pity >= PITY - 1;
+    const nid = process.env.HB_FORCE ? Number(process.env.HB_FORCE) : rollOne(type, sure ? 5 : 0);
+    const star = (ninjas().get(nid) || [])[11] || 0;
+    pity = star >= 5 ? 0 : pity + 1;
     got.push({ ninja: nid, seq: giveCard(db, pl.uid, pl.server_id, nid) });
   }
+  db.prepare(`INSERT INTO recruit_state(uid,server_id,type,last_free,pity) VALUES(?,?,?,?,?)
+    ON CONFLICT(uid,server_id,type) DO UPDATE SET last_free=excluded.last_free, pity=excluded.pity`).run(pl.uid, pl.server_id, type, free ? Math.floor(Date.now() / 1000) : st.last, pity);
   return { cost, got };
 }
 function awardXml(c) {
@@ -206,9 +252,18 @@ function awardXml(c) {
 function rollPack(r) {
   const t = String(r[2]);
   const star = /Five-Star Shinobi Card|Sage of the Six/.test(t) ? (Math.random() < 0.35 ? 5 : 4) : /Pack III/.test(t) ? (Math.random() < 0.2 ? 5 : 4) : /Pack II/.test(t) ? (Math.random() < 0.15 ? 4 : 3) : (Math.random() < 0.08 ? 5 : 3);
-  if (/Equipment/.test(t)) return { equip: randomEquip(1 + Math.floor(Math.random() * 3), star) };
+  // "One, Two-Star ..." and "Three-Star ..." packs are exactly those stars (slot 0-2 = weapon / armor / trinket)
+  const low = /One,\s*Two-Star/.test(t), three = /^Three-Star/.test(t);
+  if (/Equipment/.test(t)) return low ? { equip: randomEquip(Math.floor(Math.random() * 3), 1, 2) } : three ? { equip: randomEquip(Math.floor(Math.random() * 3), 3, 3) } : { equip: randomEquip(Math.floor(Math.random() * 3), star) };
+  if (low && !/Ninjutsu/.test(t)) { const pool = pools()[1 + Math.floor(Math.random() * 2)]; if (pool && pool.length) return { ninja: pool[Math.floor(Math.random() * pool.length)] }; }
+  if (three && !/Ninjutsu/.test(t)) { const pool = pools()[3]; if (pool && pool.length) return { ninja: pool[Math.floor(Math.random() * pool.length)] }; }
   if (/Gold/.test(t) && Math.random() < 0.3) return { cash: Number((t.match(/(\d+) Gold/) || [0, 300])[1]) };
-  if (/Ninjutsu/.test(t)) return { coin: 30000 };
+  if (/Ninjutsu/.test(t)) { // a real ninjutsu card of the star the pack names (was a 30000 silver placeholder)
+    const want = /Five-Star/.test(t) ? [5] : /Four-Star/.test(t) ? [4] : /Three-Star/.test(t) ? [3] : /One,\s*Two/.test(t) ? [1, 2] : [3, 4];
+    const pool = table('ninjutsuinfo').rows.filter((x) => want.includes(x[5]) && x[6] === 1);
+    if (pool.length) return { ninjutsu: pool[Math.floor(Math.random() * pool.length)][0] };
+    return { coin: 30000 };
+  }
   const pool = pools()[star] || pools()[4];
   return { ninja: pool[Math.floor(Math.random() * pool.length)] };
 }
@@ -233,10 +288,13 @@ function grantDrop(db, pl, dropId) {
   const n = r[13] || 1;
   const cards = [], props = [];
   let coin = 0, cash = 0, soul = 0, chips = 0;
-  const pack = r[12] === 1 && !(r[3] > 0) && !(r[7] > 0) ? rollPack(r) : null;
+  // drop type 1 = random pack. "X-Star ... Card" packs carry one example card in col 3/4; roll a random card of that kind instead
+  // of always giving the example (Aburame Torune every time, GitHub #4).
+  const pack = r[12] === 1 && !(r[7] > 0) && (!(r[3] > 0) || /Star/.test(String(r[2]))) ? rollPack(r) : null;
   const ninja = pack ? pack.ninja : r[3], equip = pack ? pack.equip : (r[3] > 0 ? 0 : r[4]);
   if (ninja > 0) for (let i = 0; i < n; i++) cards.push({ type: 1, id: ninja, seq: giveCard(db, pl.uid, pl.server_id, ninja) });
   else if (equip > 0) for (let i = 0; i < n; i++) { const seq = giveEquip(db, pl.uid, pl.server_id, equip); if (seq) cards.push({ type: db.prepare('SELECT type FROM cards WHERE seq=?').get(seq).type, id: equip, seq }); }
+  else if (pack && pack.ninjutsu) cards.push({ type: 6, id: pack.ninjutsu, seq: giveCard(db, pl.uid, pl.server_id, pack.ninjutsu, 6) });
   else if (pack) { cash = pack.cash || 0; coin = pack.coin || 0; }
   else if (r[7] > 0) { propAdd(db, pl.uid, pl.server_id, r[7], n); props.push({ id: r[7], num: n }); }
   else if (r[10] > 0) cash = r[10] * n;
@@ -247,7 +305,11 @@ function grantDrop(db, pl, dropId) {
   else if (r[5] > 0) for (let i = 0; i < n; i++) cards.push({ type: 6, id: r[5], seq: giveCard(db, pl.uid, pl.server_id, r[5], 6) });
   else if (r[6] > 0) for (let i = 0; i < n; i++) cards.push({ type: 5, id: r[6], seq: giveCard(db, pl.uid, pl.server_id, r[6], 5) });
   if (coin || cash) db.prepare('UPDATE players SET coin=coin+?, gold=gold+? WHERE uid=? AND server_id=?').run(coin, cash, pl.uid, pl.server_id);
-  const cardXml = cards.map((c) => '<card>' + el('id', c.id) + el('type', c.type) + el('num', 1) + el('attri', 0) + el('bagIndex', c.seq) + el('level', 1) + el('newlife', 0) + el('starlevel', 0) + '</card>').join('');
+  // In an <award> the client reads <type> as the reward kind (CGameObjElement::firefly_GetInfoFromDropId): 1 shinobi, 2 ANY equipment,
+  // 4 ninjutsu, 5 seal. Our card table uses 2/3/4 for weapon/armor/trinket and 6 for ninjutsu; sending those drew ninjutsu as the
+  // "beast" placeholder card (GitHub #4) and armor/trinkets as the wrong kind.
+  const AWARD_TYPE = { 1: 1, 2: 2, 3: 2, 4: 2, 5: 5, 6: 4 };
+  const cardXml = cards.map((c) => '<card>' + el('id', c.id) + el('type', AWARD_TYPE[c.type] || c.type) + el('num', 1) + el('attri', 0) + el('bagIndex', c.seq) + el('level', 1) + el('newlife', 0) + el('starlevel', 0) + '</card>').join('');
   const propXml = props.map((x) => '<prop>' + el('id', x.id) + el('num', x.num) + '</prop>').join('');
   // Lua award screens count one fragment per <chipitem>, so repeat it n times with num="1".
   const chipXml = `<chipitem id="${r[8]}" num="1"/>`.repeat(chips);
@@ -290,17 +352,70 @@ function masterPetXml(db, pl) {
 function battleXml(db, pl, chap, stage, opt = {}) {
   const team = db.prepare('SELECT t.slot, c.seq, c.ninja_id, c.level, c.starlevel FROM team t JOIN cards c ON c.seq=t.seq WHERE t.uid=? AND t.server_id=? ORDER BY t.slot').all(pl.uid, pl.server_id);
   const ts = teamStats(db, pl.uid, pl.server_id);
-  const mine = team.map((t, i) => { const q = ts.slots[i] || {}; return { id: t.ninja_id, bagid: t.seq, low: q.al || 40, high: q.ah || 60, end: Math.round(((q.dl || 0) + (q.dh || 0)) * 2 + 300), level: t.level, star: t.starlevel }; });
-  const foes = (opt.enemyIds || [21, 22, 23]).map((id, i) => ({ id, bagid: 1000 + i, low: 10, high: 20, end: 60 + stage * 10, level: opt.enemyLevel || 1, star: 0 }));
-  const rounds = [];
-  foes.forEach((foe, i) => {
-    const me = mine[i % mine.length];
-    rounds.push({ AttackNinja: me.bagid, Attack: me.high, AttackAttri: 0, DefenseNinja: foe.bagid, Defense: 0, DefenseAttri: 0,
-      CauseLimit: 0, LimitVal: 0, FinalAttack: me.high, FinalDefense: 0, AttPetAttack: 0, AttPetDefense: 0, DefPetAttack: 0, DefPetDefense: 0,
-      AttPetSkillHurt: 0, DefpetSkillHurt: 0, AttGateAttack: 0, AttGateDefense: 0, DefGateAttack: 0, DefGateDefense: 0 });
+  const mine = team.map((t, i) => { const q = ts.slots[i] || {}; return { id: t.ninja_id, bagid: t.seq, low: q.al || 40, high: q.ah || 60, end: Math.round(((q.dl || 0) + (q.dh || 0)) * 2 + 300), def: Math.round(((q.dl || 0) + (q.dh || 0)) / 2) || 60, level: t.level, star: t.starlevel }; });
+  const given = opt.foes ? opt.foes.map((f, i) => ({ ...f, bagid: 1000 + i })) : null; // real stage enemies (game.stageFoes)
+  const mkFoes = (ratio) => given ? given.map((f) => ({ ...f })) : (opt.enemyIds || [21, 22, 23]).map((id, i) => {
+    if (ratio === undefined) return { id, bagid: 1000 + i, low: 10, high: 20, end: 60 + stage * 10, def: 10, level: opt.enemyLevel || 1, star: 0 };
+    // enemy stats follow the player's own first ninja so the fight we describe can end the way the server decided (ratio = enemy / me)
+    const me = mine[i % mine.length] || { low: 40, high: 60, end: 300 };
+    const high = Math.max(1, Math.round(me.high * ratio)), low = Math.max(1, Math.round(me.low * ratio));
+    return { id, bagid: 1000 + i, low, high, end: Math.max(1, Math.round(high * 2.6)), def: Math.max(1, Math.round(high * 0.3)), level: opt.enemyLevel || 1, star: 0 };
   });
+  // Turn-based replay: my ninjas and the enemies hit in turn, each target is the first living ninja on the other side; a ninja
+  // falls when the damage it took reaches its `end`. The winner is whoever still stands, so what the client shows is consistent.
+  const play = (foes, sweep) => {
+    const hp = new Map([...mine, ...foes].map((n) => [n.bagid, sweep === true && foes.includes(n) ? 1 : n.end]));
+    const rolled = [];
+    const alive = (list) => list.filter((n) => hp.get(n.bagid) > 0);
+    const round = (att, def) => {
+      // FinalAttack / FinalDefense are what the two cards show (CNewFightCardView::SetFinalData: the attacker's card shows attack - defense when
+      // positive, the defender's card defense - attack when positive). The client subtracts as UNSIGNED numbers: an attack below the defence wraps
+      // to a huge damage ("2000K") and crashes, so FinalAttack must never be below FinalDefense (clamped to defence + 1).
+      const roll = Math.max((def.def || 0) + 1, Math.round(att.low + Math.random() * (att.high - att.low)));
+      hp.set(def.bagid, hp.get(def.bagid) - roll);
+      rolled.push({ AttackNinja: att.bagid, Attack: roll, AttackAttri: 0, DefenseNinja: def.bagid, Defense: 0, DefenseAttri: 0,
+        CauseLimit: 0, LimitVal: 0, FinalAttack: roll, FinalDefense: def.def || 0, AttPetAttack: 0, AttPetDefense: 0, DefPetAttack: 0, DefPetDefense: 0,
+        AttPetSkillHurt: 0, DefpetSkillHurt: 0, AttGateAttack: 0, AttGateDefense: 0, DefGateAttack: 0, DefGateDefense: 0 });
+    };
+    if (sweep === true) { // won fight: each of my hits takes one enemy down, so the client's enemy counter ends at 0 (a longer replay made it go negative)
+      const weakest = Math.min(...mine.map((m) => m.low)); // the enemy card's end must be below any hit so one hit really kills
+      foes.forEach((f) => { f.end = Math.max(1, Math.min(f.end, Math.round(weakest * 0.8))); });
+      foes.forEach((f, i) => round(mine[i % mine.length], f)); // only my side hits: one kill per round
+      return { rounds: rolled, won: true };
+    }
+    if (sweep === 'lose') {
+      // Lost fight. In this game only the attacking team hits (CFightResultData::AddFightRoundData reads every round from the attacker's
+      // side): a loss is the attackers' hits failing to take every defender down. Each of my ninjas lands one weak hit (just above the
+      // enemy's defence, far below its life), the enemies stay standing and the result is "lose".
+      foes.forEach((f) => { f.end = Math.max(f.end, ((f.def || 0) + 2) * (mine.length + 2)); });
+      mine.forEach((m, i) => {
+        const f = foes[i % foes.length], roll = (f.def || 0) + 1;
+        hp.set(f.bagid, hp.get(f.bagid) - roll);
+        rolled.push({ AttackNinja: m.bagid, Attack: roll, AttackAttri: 0, DefenseNinja: f.bagid, Defense: 0, DefenseAttri: 0,
+          CauseLimit: 0, LimitVal: 0, FinalAttack: roll, FinalDefense: f.def || 0, AttPetAttack: 0, AttPetDefense: 0, DefPetAttack: 0, DefPetDefense: 0,
+          AttPetSkillHurt: 0, DefpetSkillHurt: 0, AttGateAttack: 0, AttGateDefense: 0, DefGateAttack: 0, DefGateDefense: 0 });
+      });
+      return { rounds: rolled, won: false };
+    }
+    for (let t = 0, turn = 0; t < 200 && alive(mine).length && alive(foes).length; t++, turn++) {
+      const mineTurn = turn % 2 === 0, atkSide = alive(mineTurn ? mine : foes), defSide = alive(mineTurn ? foes : mine);
+      round(atkSide[Math.floor(turn / 2) % atkSide.length], defSide[0]);
+    }
+    return { rounds: rolled, won: alive(foes).length === 0 };
+  };
+  let foes, fight;
+  if (opt.win === undefined) { // training / boss fights: enemies a bit weaker than the player's ninjas but with real numbers (the card shows their defense left)
+    const base = Math.min(0.55, 0.3 + stage * 0.004); // a little tougher on later stages (stage = row id inside the chapter)
+    foes = mkFoes(base); fight = play(foes, true);
+  }
+  else { // the server already decided win/lose: pick enemy strength until the replay agrees
+    if (opt.win) { foes = mkFoes(0.3); fight = play(foes, true); }
+    else { foes = mkFoes(1.5); fight = play(foes, 'lose'); }
+  }
+  const rounds = fight.rounds;
   const roundXml = rounds.map((r) => '<round>' + Object.entries(r).map(([k, v]) => el(k, v)).join('') + '<skills></skills><defense_skills></defense_skills></round>').join('');
-  const win = opt.win === false ? 0 : 1;
+  const win = fight.won ? 1 : 0;
+  if (opt.out) opt.out.win = fight.won;
   const nick = (opt.enemyName || 'Enemy').replace(/[<>&"]/g, '');
   return `<fight><preview type="0" result="${win}" defensenick="${nick}" defenseuid="${opt.enemyUid || 0}" defensecountry="1" defenselevel="${opt.enemyLevel || 1}" defenseviplevel="0"/>` +
     '<guard><ninjalist>' + foes.map(ninjaXml).join('') + '</ninjalist></guard>' +
@@ -312,13 +427,14 @@ function battleXml(db, pl, chap, stage, opt = {}) {
 // Spar fight against rival ToUid (a real player or a bot). Strength = level + stars of the team; a little luck.
 function sparFight(db, pl, toUid) {
   const rv = rivals(db, pl, 12).find((r) => r.id === toUid) || { id: toUid, level: pl.level, nick: 'Rival', ninja: 5 };
-  const botAtk = (lv, star) => 150 + lv * 55 + star * 60;
+  // bot strength in the same units as a ninja's attack (level 1 shinobi ~ 210): about even at equal level (ours)
+  const botAtk = (lv, star) => 60 + lv * 30 + star * 30;
   const ts = teamStats(db, pl.uid, pl.server_id);
   const mine = (ts.total.al + ts.total.ah) / 2 / Math.max(1, ts.slots.length);
   let theirs;
   if (rv.id < 9000000) { const o = db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(rv.id, pl.server_id); const t2 = o ? teamStats(db, o.uid, o.server_id) : null; theirs = t2 ? (t2.total.al + t2.total.ah) / 2 / Math.max(1, t2.slots.length) : botAtk(rv.level, 3); }
   else theirs = botAtk(rv.level, rv.star || 3);
-  const win = mine * (0.7 + Math.random() * 0.6) >= theirs;
+  const win = process.env.HB_SPAR ? process.env.HB_SPAR === 'win' : mine * (0.7 + Math.random() * 0.6) >= theirs; // HB_SPAR = test aid
   const xml = battleXml(db, pl, 0, 1, { enemyIds: [rv.ninja, rv.ninja, rv.ninja], enemyName: rv.nick, enemyUid: rv.id, enemyLevel: rv.level, win });
   const coin = win ? 3 + rv.level : 0, exp = win ? 14 : 2;
   return { win, xml, coin, exp };
@@ -334,14 +450,18 @@ function addExp(db, pl, exp) {
     cur -= r[2]; level++;
   }
   db.prepare('UPDATE players SET level=?, exp=? WHERE uid=? AND server_id=?').run(level, cur, pl.uid, pl.server_id);
+  if (level > pl.level) { // a level-up fills the energy to the new level's maximum (owner: "leveling should refill")
+    const max = (rows.find((x) => x[1] === level) || [])[4] || 0;
+    db.prepare('UPDATE players SET energy=MAX(energy,?), energy_t=? WHERE uid=? AND server_id=?').run(max, Math.floor(Date.now() / 1000), pl.uid, pl.server_id);
+  }
   return level;
 }
 
 // ---- Daily tasks -----------------------------------------------------------------------------
 const today = () => new Date().toISOString().slice(0, 10);
-const DAILY_AWARDS = [ // id, points needed, reward
-  { id: 1, cost: 20, coin: 5000, cash: 0 }, { id: 2, cost: 40, coin: 0, cash: 20 }, { id: 3, cost: 60, coin: 10000, cash: 0 },
-  { id: 4, cost: 80, coin: 0, cash: 50 }, { id: 5, cost: 100, coin: 0, cash: 100 },
+const DAILY_AWARDS = [ // id, points needed, dropinfo ids paid (the original list is lost: (ours) silver and gold like before, now real drops the dialog can show)
+  { id: 1, cost: 20, drops: [46] }, { id: 2, cost: 40, drops: [97] }, { id: 3, cost: 60, drops: [56] },
+  { id: 4, cost: 80, drops: [100] }, { id: 5, cost: 100, drops: [260] },
 ];
 function dailyEnsure(db) {
   db.exec(`CREATE TABLE IF NOT EXISTS dailytask (uid INTEGER, server_id INTEGER, day TEXT, task_id INTEGER, process INTEGER DEFAULT 0, PRIMARY KEY(uid,server_id,day,task_id));
@@ -363,16 +483,19 @@ function dailyXml(db, uid, sid) {
     return `<task id="${r[0]}" process="${p}"/>`;
   }).join('');
   score = Math.min(score, 100);
-  const awards = DAILY_AWARDS.map((a) => `<award id="${a.id}" status="${claimed.has(a.id) ? 2 : score >= a.cost ? 1 : 0}" cost="${a.cost}"><drop_list></drop_list></award>`).join('');
+  const awards = DAILY_AWARDS.map((a) => `<award id="${a.id}" status="${claimed.has(a.id) ? 2 : score >= a.cost ? 1 : 0}" cost="${a.cost}"><drop_list>${a.drops.map((d) => `<item>${d}</item>`).join('')}</drop_list></award>`).join('');
   return `<player><total>100</total><current>${score}</current></player><task_list>${tasks}</task_list><award_list>${awards}</award_list>`;
 }
 function dailyClaim(db, pl, awardId) {
   dailyEnsure(db);
   const a = DAILY_AWARDS.find((x) => x.id === awardId);
   if (!a) return null;
+  if (db.prepare('SELECT 1 FROM dailyaward WHERE uid=? AND server_id=? AND day=? AND award_id=?').get(pl.uid, pl.server_id, today(), awardId)) return { error: 'already claimed' };
+  // the client greys the box until the day's points reach its cost; check the same thing here
+  const m = dailyXml(db, pl.uid, pl.server_id).match(new RegExp(`<award id="${awardId}" status="(\\d)"`));
+  if (!m || m[1] !== '1') return { error: 'points not reached' };
   db.prepare('INSERT OR IGNORE INTO dailyaward(uid,server_id,day,award_id) VALUES(?,?,?,?)').run(pl.uid, pl.server_id, today(), awardId);
-  db.prepare('UPDATE players SET coin=coin+?, gold=gold+? WHERE uid=? AND server_id=?').run(a.coin, a.cash, pl.uid, pl.server_id);
-  return a;
+  return { xml: mergeAwards(a.drops.map((id) => grantDrop(db, pl, id)).filter(Boolean)) };
 }
 // Complete <award> element (Lua requires every child to exist).
 function awardFull({ coin = 0, cash = 0, exp = 0 } = {}) {
@@ -427,17 +550,65 @@ function actXml(db, pl) {
   const subs = (a) => a.map((i) => `<subitem subid="${i}"></subitem>`).join('');
   return `<activity type="1" loginallnum="${c.days}"><item actid="1">${subs(c.login)}</item></activity>` +
     `<activity type="2"><item actid="2">${subs(c.up)}</item></activity><activity type="3"><item actid="3" pos="-1"></item></activity><activity type="4"><item actid="4"></item></activity>` +
-    '<conf><items>' + [[1, 1, 2], [2, 2, 2], [41, 3, 2], [20, 4, 1], [21, 5, 1], [12, 6, 2], [24, 7, 1], [47, 8, 2], [17, 9, 1]].map(([id, pos, type]) => `<item><id>${id}</id><pos>${pos}</pos><status>1</status><onoff>1</onoff><type>${type}</type></item>`).join('') + `<item><id>31</id><pos>10</pos><status>1</status><onoff>0</onoff><type>1</type><timeleft>${db.prepare('SELECT 1 FROM stagegift WHERE uid=? AND server_id=?').get(pl.uid, pl.server_id) ? 0 : 315360000}</timeleft></item>` + '</items><xiaoopen>1</xiaoopen><gambletype>1</gambletype></conf>';
+    // Events switched off in the Server Manager are left out of the list, so their button / Event menu line disappears.
+    '<conf><items>' + settings.EVENTS.filter((e) => e.id !== 31 && settings.eventOn(db, e.id)).map(({ id, pos, type }) => `<item><id>${id}</id><pos>${pos}</pos><status>1</status><onoff>1</onoff><type>${type}</type></item>`).join('') +
+    `<item><id>31</id><pos>10</pos><status>1</status><onoff>0</onoff><type>1</type><timeleft>${!settings.eventOn(db, 31) || db.prepare('SELECT 1 FROM stagegift WHERE uid=? AND server_id=?').get(pl.uid, pl.server_id) ? 0 : 315360000}</timeleft></item>` + '</items><xiaoopen>1</xiaoopen><gambletype>1</gambletype></conf>';
+}
+// What the pack screens show comes from the client's own Lua tables (loginPackData / upgradePackData, 1-4 dropinfo ids each):
+// pay exactly those drops, so the dialog and the backpack match the icons on the button.
+let packLua = null;
+function actPackDrops(actid, subid) {
+  if (!packLua) {
+    packLua = { 1: [], 2: [] };
+    const dir = require('path').join(__dirname, 'reference', 'lua-scripts');
+    for (const [a, file] of [[1, 'loginActivityData.lua'], [2, 'upgradeActivityData.lua']]) {
+      let txt = '';
+      try { txt = require('fs').readFileSync(require('path').join(dir, file), 'utf8'); } catch (e) { continue; }
+      for (const m of txt.matchAll(/PackData\[(\d+)\]\s*=\s*\{([^}]*)\}/g)) {
+        packLua[a][Number(m[1]) - 1] = [...m[2].matchAll(/_drop(\d)id=(\d+)/g)].map((x) => Number(x[2])).filter((id) => id > 0);
+      }
+    }
+  }
+  return (packLua[actid] || [])[subid - 1] || [];
+}
+// Cumulative top-up rewards (the "49$ gift" / pay history list): payhistorydropData.lua has month_dayback = dollars topped up in total and up to 4
+// dropinfo ids per step. The client wants <payheaplist><payheap><id/><state/></payheap>...</payheaplist>: state 0 = can claim, 250011 = not yet, 2 = claimed.
+let heapRows = null;
+function payHeapRows() {
+  if (!heapRows) {
+    heapRows = [];
+    let txt = '';
+    try { txt = fs.readFileSync(path.join(__dirname, 'reference', 'lua-scripts', 'payhistorydropData.lua'), 'utf8'); } catch (e) { /* none */ }
+    for (const m of txt.matchAll(/pay_history_drop\[(\d+)\]\s*=\s*\{([^}]*)\}/g)) {
+      const f = m[2], num = (k) => Number((f.match(new RegExp(k + '=(\\d+)')) || [0, 0])[1]);
+      heapRows[Number(m[1])] = { id: Number(m[1]), dollars: num('month_dayback'), drops: [1, 2, 3, 4].map((i) => num('drop' + i + 'id')).filter((x) => x > 0) };
+    }
+  }
+  return heapRows.filter(Boolean);
+}
+function payHeapState(db, pl, topped) {
+  actEnsure(db);
+  const done = new Set(db.prepare('SELECT subid FROM actclaim WHERE uid=? AND server_id=? AND actid=9028').all(pl.uid, pl.server_id).map((r) => r.subid));
+  return payHeapRows().map((r) => ({ id: r.id, state: done.has(r.id) ? 2 : topped >= r.dollars ? 0 : 250011 }));
+}
+function payHeapXml(db, pl, topped) {
+  return '<payheaplist>' + payHeapState(db, pl, topped).map((x) => `<payheap><id>${x.id}</id><state>${x.state}</state></payheap>`).join('') + '</payheaplist>';
+}
+function payHeapClaim(db, pl, topped, heapId) {
+  const st = payHeapState(db, pl, topped).find((x) => x.id === heapId);
+  if (!st) return { code: 5, msg: 'no such reward' };
+  if (st.state === 2) return { code: 250010, msg: 'already claimed' };
+  if (st.state !== 0) return { code: 250011, msg: 'not reached yet' };
+  db.prepare('INSERT OR IGNORE INTO actclaim(uid,server_id,actid,subid) VALUES(?,?,9028,?)').run(pl.uid, pl.server_id, heapId);
+  return { code: 0, xml: mergeAwards(payHeapRows().find((r) => r.id === heapId).drops.map((id) => grantDrop(db, pl, id)).filter(Boolean)) };
 }
 function actClaim(db, pl, actid, subid) {
   const c = actClaimable(db, pl);
   const ok = (actid === 1 ? c.login : actid === 2 ? c.up : []).includes(subid);
   if (!ok) return null;
-  const P = table('activity_packs');
   db.prepare('INSERT OR IGNORE INTO actclaim(uid,server_id,actid,subid) VALUES(?,?,?,?)').run(pl.uid, pl.server_id, actid, subid);
-  const coin = (actid === 1 ? P.login_q : P.upgrade_q)[subid - 1] || 1000, cash = 20 + subid * 5;
-  db.prepare('UPDATE players SET coin=coin+?, gold=gold+? WHERE uid=? AND server_id=?').run(coin, cash, pl.uid, pl.server_id);
-  return { coin, cash };
+  const got = actPackDrops(actid, subid).map((id) => grantDrop(db, pl, id)).filter(Boolean);
+  return { xml: mergeAwards(got) };
 }
 
 // ---- Consumables / shop ---------------------------------------------------------------------
@@ -472,9 +643,10 @@ function propUse(db, pl, goodsId) {
   propAdd(db, pl.uid, pl.server_id, goodsId, -1);
   let coin = 0, ap = 0;
   if (row[7] === 3) { coin = Math.round(row[8]); db.prepare('UPDATE players SET coin=coin+? WHERE uid=? AND server_id=?').run(coin, pl.uid, pl.server_id); }
-  if (row[7] === 1) { ap = Math.round(row[8]); db.prepare('UPDATE players SET energy=energy+? WHERE uid=? AND server_id=?').run(ap, pl.uid, pl.server_id); }
+  if (row[7] === 1) { energyTick(db, pl); db.prepare('UPDATE players SET energy=energy+? WHERE uid=? AND server_id=?').run(Math.round(row[8]), pl.uid, pl.server_id); }
   const now = db.prepare('SELECT energy, coin FROM players WHERE uid=? AND server_id=?').get(pl.uid, pl.server_id);
-  return { ap, coin, left: have - 1 }; // deltas: the client adds them to its own totals
+  if (row[7] === 1) ap = now.energy; // the ramen dialog SETS the energy to <propuse ap> (BuyRemenDlg: SetBodyValue(ap)): send the new total
+  return { ap, coin, left: have - 1 };
 }
 
 // Gift packs: only packs whose drop row gives ninja cards work (equipment/ninjutsu cards are not implemented yet).
@@ -520,7 +692,7 @@ function strengthen(db, pl, srcSeq, eatSeqs) {
 }
 
 // ---- Reincarnation / equipment advance (rl_w_newlife Cmd 7): ReadyCard gains +1 grade, EatCard (same item id) is consumed.
-const NEWLIFE_MAX = (type) => (type === 1 ? 6 : table('equipnewlifeprop').rows.length);
+const NEWLIFE_MAX = (type) => (type === 1 ? 8 : table('equipnewlifeprop').rows.length); // shinobi: 8 (v28 draws rebirth outlines 1-8 only, GetTopInlayFrame; the card lists 8 bonuses)
 const NEWLIFE_COST = (grade) => 5000 * grade;
 function newlife(db, pl, readySeq, eatSeq, grade) {
   ensure(db);
@@ -532,13 +704,16 @@ function newlife(db, pl, readySeq, eatSeq, grade) {
     if (a.seq === b.seq || a.type !== b.type || a.ninja_id !== b.ninja_id) return { error: 'cards must match' };
     if (db.prepare('SELECT 1 FROM team WHERE seq=?').get(b.seq) || db.prepare('SELECT 1 FROM equipped WHERE seq=?').get(b.seq)) return { error: 'material card is in use' };
   }
-  const next = Math.min(NEWLIFE_MAX(a.type), (a.newlife || 0) + 1);
-  const cost = NEWLIFE_COST(next);
-  if (pl.coin < cost) return { error: 'not enough silver' };
-  db.prepare('UPDATE players SET coin=coin-? WHERE uid=? AND server_id=?').run(cost, pl.uid, pl.server_id);
+  if ((a.newlife || 0) >= NEWLIFE_MAX(a.type)) return { error: 'already at the highest rebirth' };
+  const next = (a.newlife || 0) + 1;
+  // The original cost (the screen): ONE copy of the same card, OR newlifeconfig[grade][star] reincarnation pills (prop 11). No silver.
+  const star = (ninjas().get(a.ninja_id) || [])[11] || 5;
+  const pills = (table('newlifeconfig').rows.find((r) => r[2] === next && r[3] === star) || [])[4] || 0;
+  if (!b && (propCounts(db, pl.uid, pl.server_id)[11] || 0) < pills) return { error: 'not enough reincarnation pills' };
+  const cost = 0;
   db.prepare('UPDATE cards SET newlife=?, level=1, exp=0 WHERE seq=?').run(next, a.seq);
   if (b) db.prepare('DELETE FROM cards WHERE seq=?').run(b.seq);
-  else if (propCounts(db, pl.uid, pl.server_id)[11] > 0) propAdd(db, pl.uid, pl.server_id, 11, -Math.min(80, propCounts(db, pl.uid, pl.server_id)[11]));
+  else propAdd(db, pl.uid, pl.server_id, 11, -pills);
   const gain = Math.round(((ninjaStats({ ...a, newlife: next }).ah) - ninjaStats(a).ah) / 2) || 0;
   return { grade: next, cost, gain };
 }
@@ -550,13 +725,17 @@ function potentialXml(db, pl, seq) {
   if (!c) return null;
   const lim = potLimit(c);
   return `<attack limit_att="${lim}" add_att="${c.pot_att}"/><defense limit_def="${lim}" add_def="${c.pot_def}"/><chakra limit_ckr="${lim}" add_ckr="${c.pot_ckr}"/>` +
-    '<cost_list><cost cost_id="1" name="Training pill" type="1" need_miyao="0" need_golden="0"/><cost cost_id="2" name="Gold training" type="2" need_miyao="0" need_golden="0"/></cost_list>';
+    // CPotentialView keeps these rows in one list: even index = pill row, odd = gold row; the dropdown (onClickMode) jumps 2 rows, so it
+    // needs the "10 times" pair too (with only 2 rows it read past the list and crashed). Costs (ours): free, as before.
+    '<cost_list><cost cost_id="1" name="1 time" type="1" need_miyao="0" need_golden="0"/><cost cost_id="2" name="1 time" type="2" need_miyao="0" need_golden="0"/>' +
+    '<cost cost_id="3" name="10 times" type="1" need_miyao="0" need_golden="0"/><cost cost_id="4" name="10 times" type="2" need_miyao="0" need_golden="0"/></cost_list>';
 }
 function potentialRoll(db, pl, seq, costId) {
   const c = db.prepare('SELECT * FROM cards WHERE seq=? AND uid=? AND server_id=?').get(seq, pl.uid, pl.server_id);
   if (!c) return { error: 'no such card' };
-  const lim = potLimit(c), hi = costId === 2 ? 14 : 8, lo = costId === 2 ? 3 : -2;
-  const roll = () => Math.floor(Math.random() * (hi - lo + 1)) + lo;
+  const gold = costId % 2 === 0, times = costId > 2 ? 10 : 1;
+  const lim = potLimit(c), hi = gold ? 14 : 8, lo = gold ? 3 : -2;
+  const roll = () => { let s = 0; for (let i = 0; i < times; i++) s += Math.floor(Math.random() * (hi - lo + 1)) + lo; return s; };
   const d = { att: roll(), def: roll(), ckr: roll() };
   // never push a stat outside 0..limit
   d.att = Math.max(-c.pot_att, Math.min(lim - c.pot_att, d.att)); d.def = Math.max(-c.pot_def, Math.min(lim - c.pot_def, d.def)); d.ckr = Math.max(-c.pot_ckr, Math.min(lim - c.pot_ckr, d.ckr));
@@ -661,6 +840,11 @@ function sealBonus(st, markId) {
   for (const k of keys) o[k] = Math.round(o[k] * (1 + pct));
   return o;
 }
+let matchIndex = null;
+function matchRows(ninjaId) {
+  if (!matchIndex) { matchIndex = new Map(); for (const r of table('ninjamatch').rows) { if (!matchIndex.has(r[3])) matchIndex.set(r[3], []); matchIndex.get(r[3]).push(r); } }
+  return matchIndex.get(ninjaId) || [];
+}
 function teamStats(db, uid, sid) {
   ensure(db);
   const team = db.prepare('SELECT t.slot, c.* FROM team t JOIN cards c ON c.seq=t.seq WHERE t.uid=? AND t.server_id=? ORDER BY t.slot').all(uid, sid);
@@ -674,6 +858,29 @@ function teamStats(db, uid, sid) {
     }
     return { seq: c.seq, ninja_id: c.ninja_id, level: c.level, ...st };
   });
+  // Chains (ninjamatch.json; a card's "Chains" list on its detail screen): cols 3 ninja it belongs to, 5 type, 6-13 partner ninja ids, 14 equipment id,
+  // 15 ninjutsu id, 16-18 attack/defence/chakra ratio. Type 1 = the card's own stats grow when ANY partner is in the team, or the equipment / ninjutsu is worn
+  // by it; type 0 = a leader effect: while the card is in the team every ninja gets the ratio. Each chain adds ratio x the slot's stats (after gear).
+  // Chain partners match by CHARACTER, not by card id: the table has 8 partner places and often lists only some variants
+  // (Kaguya "Fight with Susa Kakashi" lists 5026 but not 5027 or Susa Kakashi (God) 5028; GitHub #5).
+  const who = (id) => String((ninjas().get(id) || [])[2] || id).toLowerCase().replace(/\(god\)/g, '').replace(/[^a-z]/g, '');
+  const inTeam = new Set(slots.map((s) => s.ninja_id));
+  const teamWho = slots.map((s) => who(s.ninja_id));
+  const owned = new Set(db.prepare('SELECT DISTINCT ninja_id FROM cards WHERE uid=? AND server_id=? AND type=1').all(uid, sid).map((r) => r.ninja_id));
+  const ownedWho = new Set([...owned].map((id) => String((ninjas().get(id) || [])[2] || id).toLowerCase().replace(/\(god\)/g, '').replace(/[^a-z]/g, '')));
+  const chain = slots.map(() => ({}));
+  const add = (i, r) => { const s = slots[i]; [['al', 'ah', 16], ['dl', 'dh', 17], ['cl', 'ch', 18]].forEach(([lo, hi, col]) => { if (r[col] > 0) { chain[i][lo] = (chain[i][lo] || 0) + Math.round(s[lo] * r[col]); chain[i][hi] = (chain[i][hi] || 0) + Math.round(s[hi] * r[col]); } }); };
+  slots.forEach((s, i) => {
+    const worn = eqRows.filter((x) => x.slot === i + 1).map((x) => x.ninja_id);
+    s.active = []; s.ready = [];
+    for (const r of matchRows(s.ninja_id)) {
+      if (r[5] === 0) { slots.forEach((_, j) => add(j, r)); s.active.push(r[0]); continue; }
+      const partner = r.slice(6, 14).some((id) => id > 0 && id !== s.ninja_id && (inTeam.has(id) || teamWho.some((w, j) => j !== i && w === who(id))));
+      if (partner || (r[14] > 0 && worn.includes(r[14])) || (r[15] > 0 && worn.includes(r[15]))) { add(i, r); s.active.push(r[0]); }
+      else if (r.slice(6, 14).some((id) => id > 0 && id !== s.ninja_id && (owned.has(id) || ownedWho.has(who(id))))) s.ready.push(r[0]); // a partner is owned but not in the team yet
+    }
+  });
+  slots.forEach((s, i) => { Object.assign(s, addStats(s, chain[i])); s.chain = chain[i]; });
   let tot = slots.reduce((a, s) => addStats(a, s), {});
   const suits = activeSuits(db, uid, sid);
   let bonus = {};
@@ -691,24 +898,47 @@ function teamStats(db, uid, sid) {
 }
 
 // Sage growth (rl_w_star Cmd 1): spend sage stones on a card for a chance at +1 sage level (stored in cards.starlevel).
-function sageGrow(db, pl, seq, stoneId, stoneNum) {
+// Sage growth (CStrengthView, rl_w_star). The original chances are the game's own ninjastrength table:
+// [id, id, level now, chance with 1/2/3/4 stones, chance to keep the level on a failure, lowest level a failure can drop to, silver].
+// Rows 1-15 are for Sage Stone I (prop 7), rows 16-30 for Sage Stone III (prop 8). Max growth level 15.
+// Extra stones (StarStoneExtID/Num) add stone_added_percent each, up to max_percent: both numbers lived on the dead server, so
+// (ours) +1% per Sage Stone I, +2% per Sage Stone III, capped at what 4 Sage Stone III give at that level.
+const GROW_MAX = 15;
+const growRow = (lv, stoneId) => table('ninjastrength').rows.find((r) => r[2] === lv && (stoneId === 8 ? r[0] > 15 : r[0] <= 15));
+const GROW_EXTRA = { 7: 1, 8: 2 };
+const growMaxPercent = (lv) => (growRow(lv, 8) || [])[6] || 0;
+function growStarList() {
+  let items = '';
+  for (let i = 0; i < GROW_MAX; i++) for (const s of [7, 8]) items += `<item star_now="${i}" max_percent="${growMaxPercent(i)}" stone_level="${s}" stone_added_percent="${GROW_EXTRA[s]}"/>`;
+  return items;
+}
+function sageGrow(db, pl, seq, stoneId, stoneNum, extId = 0, extNum = 0) {
   const card = db.prepare('SELECT * FROM cards WHERE seq=? AND uid=? AND server_id=? AND type=1').get(seq, pl.uid, pl.server_id);
   if (!card) return { error: 'card not found' };
-  const have = propCounts(db, pl.uid, pl.server_id)[stoneId] || 0;
-  stoneNum = Math.max(1, stoneNum);
-  if (have < stoneNum) return { error: 'not enough stones' };
-  const cost = 50 * (card.starlevel + 1);
+  const lv0 = card.starlevel || 0;
+  if (lv0 >= GROW_MAX) return { error: 'growth is at the maximum' };
+  const row = growRow(lv0, stoneId);
+  if (!row) return { error: 'bad stone' };
+  stoneNum = Math.min(4, Math.max(1, stoneNum || 1));
+  extNum = GROW_EXTRA[extId] ? Math.max(0, extNum || 0) : 0;
+  const counts = propCounts(db, pl.uid, pl.server_id);
+  const need = { [stoneId]: stoneNum };
+  if (extNum) need[extId] = (need[extId] || 0) + extNum;
+  for (const [id, n] of Object.entries(need)) if ((counts[id] || 0) < n) return { error: 'not enough stones' };
+  const cost = row[9];
   if (pl.coin < cost) return { error: 'not enough silver' };
-  propAdd(db, pl.uid, pl.server_id, stoneId, -stoneNum);
+  for (const [id, n] of Object.entries(need)) propAdd(db, pl.uid, pl.server_id, Number(id), -n);
   db.prepare('UPDATE players SET coin=coin-? WHERE uid=? AND server_id=?').run(cost, pl.uid, pl.server_id);
-  const chance = Math.min(100, Math.max(30, 100 - card.starlevel * 4) + (stoneId === 8 ? 10 : 0) + (stoneNum - 1) * 5);
+  const base = row[2 + stoneNum];
+  const chance = extNum ? Math.max(base, Math.min(growMaxPercent(lv0), base + extNum * GROW_EXTRA[extId])) : base;
   const win = Math.random() * 100 < chance;
-  let lv = card.starlevel, drop = 0;
+  let lv = lv0, drop = 0;
   if (win) lv++;
-  else if (lv > 0) { const floor = Math.floor(lv / 3) * 3; if (lv > floor) { lv = Math.max(floor, lv - 1); drop = 1; } }
+  else if (lv > row[8] && Math.random() * 100 >= row[7]) { lv = Math.max(row[8], lv - 1); drop = 1; } // (ours) a failure drops one level
   db.prepare('UPDATE cards SET starlevel=? WHERE seq=?').run(lv, seq);
   bumpTask(db, pl.uid, pl.server_id, 5);
-  return { win, drop, lv, left: have - stoneNum };
+  const left = propCounts(db, pl.uid, pl.server_id);
+  return { win, drop, lv, left: left[stoneId] || 0, extLeft: extNum ? left[extId] || 0 : 0, chance };
 }
 
 // Friends: on this offline server every other registered player is automatically your friend.
@@ -818,6 +1048,71 @@ function arenaFight(db, pl, toRank) {
   return { win, xml, from, to, renown };
 }
 
+// Grudge (SP, the spar stamina shown "10/3" in the top bar): max = playerlevel column 3, one point back every 2 hours (the client's own
+// timer shows "next grudge 01:59:55" at pass time 0 -> 2 h; (ours) assumption), a spar costs 1. players.sp = -1 means full.
+const SP_EVERY = 2 * 3600;
+function spState(db, pl) {
+  ensure(db);
+  const row = table('playerlevel').rows.find((r) => r[1] === pl.level) || [];
+  const max = row[3] || 3, now = Math.floor(Date.now() / 1000);
+  const r = db.prepare('SELECT sp, sp_t FROM players WHERE uid=? AND server_id=?').get(pl.uid, pl.server_id) || { sp: -1, sp_t: 0 };
+  let sp = r.sp < 0 ? max : Math.min(r.sp, max), t = r.sp_t || now;
+  if (sp < max) { const ticks = Math.floor((now - t) / SP_EVERY); if (ticks > 0) { sp = Math.min(max, sp + ticks); t = sp >= max ? now : t + ticks * SP_EVERY; } } else t = now;
+  return { sp, max, pass: sp >= max ? 0 : now - t, t };
+}
+// Energy (stamina for training): the original rule from normalconfig row 9 = one point every 180 s up to the level's maximum
+// (playerlevel col 4); the client counts the same timer from LastActionUpdatePastTime. Ramen etc. may push it above the maximum.
+const ENERGY_EVERY = 180;
+function energyTick(db, pl) {
+  ensure(db);
+  const row = table('playerlevel').rows.find((r) => r[1] === pl.level) || [];
+  const max = row[4] || 50, now = Math.floor(Date.now() / 1000);
+  const r = db.prepare('SELECT energy, energy_t FROM players WHERE uid=? AND server_id=?').get(pl.uid, pl.server_id) || { energy: max, energy_t: 0 };
+  let e = r.energy, t = r.energy_t || now;
+  if (e < max) { const ticks = Math.floor((now - t) / ENERGY_EVERY); if (ticks > 0) { e = Math.min(max, e + ticks); t = e >= max ? now : t + ticks * ENERGY_EVERY; } } else t = now;
+  db.prepare('UPDATE players SET energy=?, energy_t=? WHERE uid=? AND server_id=?').run(e, t, pl.uid, pl.server_id);
+  return { energy: e, max, pass: e >= max ? 0 : now - t };
+}
+function spUse(db, pl) {
+  const s = spState(db, pl);
+  if (s.sp <= 0) return false;
+  db.prepare('UPDATE players SET sp=?, sp_t=? WHERE uid=? AND server_id=?').run(s.sp - 1, s.sp >= s.max ? Math.floor(Date.now() / 1000) : s.t, pl.uid, pl.server_id);
+  return true;
+}
+// ---- Training enemies (GitHub #4 "full scaling through the whole campaign") -----------------------------------------------
+// Boss rows of roundinfo list their enemies in cols 7-21 (npc ninjainfo ids). An npc row has its level in col 7 and its star in col 11
+// but no stats (they lived on the dead server), so (ours) an npc gets the AVERAGE stats of the game's own playable cards of the same star
+// at that level: base (cols 19-24) + growth (cols 25-30) x (level - 1). A normal stage fights the followers of its part's boss
+// (without the leader, at most 3) at the boss's level. At most 5 enemies are sent (the fight screen has 5 places; (ours)).
+// ENEMY_SCALE (ours): enemies get this share of an average card's stats. 0.6 keeps the first boss (1-2) winnable with the starter card;
+// raise it to make the whole campaign harder, lower it for easier. One number, so the owner can tune it after playtesting.
+const ENEMY_SCALE = Number(process.env.HB_ENEMY_SCALE) || 0.6;
+let starAvg = null;
+function npcStats(star, level) {
+  if (!starAvg) {
+    starAvg = {};
+    for (const r of ninjas().values()) {
+      if (r[4] !== 1 || r[6] !== 0 || !(r[19] > 0)) continue;
+      const a = (starAvg[r[11]] = starAvg[r[11]] || { n: 0, v: new Array(12).fill(0) });
+      a.n++; for (let i = 0; i < 12; i++) a.v[i] += r[19 + i] || 0;
+    }
+  }
+  const a = starAvg[star] || starAvg[Math.min(6, Math.max(1, star || 2))] || starAvg[3];
+  const v = (i) => Math.round((a.v[i] / a.n + (a.v[i + 6] / a.n) * Math.max(0, level - 1)) * ENEMY_SCALE);
+  return { al: v(0), ah: v(1), dl: v(2), dh: v(3), cl: v(4), ch: v(5) };
+}
+function stageFoes(chap, stage) {
+  const parts = chapterParts(chap), sp = stagePart(chap, stage), part = parts[sp.part - 1];
+  if (!part) return [];
+  const own = stageRow(chap, stage) || [], boss = stageRow(chap, part.first + part.count - 1) || [];
+  const ids = (r) => r.slice(7, 22).filter((x) => x > 0);
+  let list = own[38] ? ids(own) : ids(boss).slice(1, 4);
+  if (!list.length) list = ids(boss).slice(0, 1);
+  return list.slice(0, 5).map((id) => {
+    const n = ninjas().get(id) || [], lv = n[7] || 1, s = npcStats(n[11] || 2, lv);
+    return { id, low: s.al, high: s.ah, def: Math.round((s.dl + s.dh) / 2), end: Math.round((s.dl + s.dh) * 2 + 300), level: lv, star: n[11] || 2, power: (s.al + s.ah) / 2 + (s.dl + s.dh) / 2 };
+  });
+}
 function getStage(db, uid, sid, chap) {
   ensure(db);
   const r = db.prepare('SELECT stage FROM progress WHERE uid=? AND server_id=? AND chap=?').get(uid, sid, chap);
@@ -828,6 +1123,11 @@ const stageRow = (chap, stage) => table('roundinfo').rows.find((r) => r[4] === c
 function stageEnsure(db) {
   db.exec('CREATE TABLE IF NOT EXISTS stage_clears (uid INTEGER, server_id INTEGER, chap INTEGER, stage INTEGER, clears INTEGER DEFAULT 0, boss_day TEXT, boss_used INTEGER DEFAULT 0, PRIMARY KEY(uid, server_id, chap, stage))');
 }
+// Boss stages: 3 free fights a day, a 4th and later cost BOSS_COST gold (the client shows a gold button when 0 are left).
+// Owner: "in the original you only got 3 per boss fight" (roundinfo [43] says 10-20, which the owner says is not what the game did).
+const BOSS_FREE = 3, BOSS_COST = 10;
+// Clears a stage needs before the next one opens. roundinfo [42] says 3 for every boss, but the owner says the original needed ONE boss win.
+const clearsNeeded = (row) => (row[38] ? 1 : row[42] || 1);
 // clears so far (capped at what the stage needs, like the screen) and boss tries left today
 function stageState(db, pl, chap, stage) {
   stageEnsure(db);
@@ -835,19 +1135,59 @@ function stageState(db, pl, chap, stage) {
   const r = db.prepare('SELECT * FROM stage_clears WHERE uid=? AND server_id=? AND chap=? AND stage=?').get(pl.uid, pl.server_id, chap, stage);
   const today = new Date().toISOString().slice(0, 10);
   // stages opened before clears were counted are already done
-  const done = !r && getStage(db, pl.uid, pl.server_id, chap) > stage ? (row[42] || 1) : 0;
+  const done = !r && getStage(db, pl.uid, pl.server_id, chap) > stage ? clearsNeeded(row) : 0;
   const used = r && r.boss_day === today ? r.boss_used : 0;
-  return { clears: Math.min(row[42] || 1, r ? r.clears : done), bossLeft: row[38] ? Math.max(0, (row[43] || 10) - used) : 0 };
+  return { clears: Math.min(clearsNeeded(row), r ? r.clears : done), bossLeft: row[38] ? Math.max(0, BOSS_FREE - used) : 0 };
 }
 function stageCleared(db, pl, chap, stage) {
   stageEnsure(db);
   const today = new Date().toISOString().slice(0, 10);
   const prev = stageState(db, pl, chap, stage);
   const row = stageRow(chap, stage) || [];
-  const used = row[38] ? (row[43] || 10) - prev.bossLeft + 1 : 0;
+  const used = row[38] ? BOSS_FREE - prev.bossLeft + 1 : 0;
   db.prepare(`INSERT INTO stage_clears(uid,server_id,chap,stage,clears,boss_day,boss_used) VALUES(?,?,?,?,?,?,?)
     ON CONFLICT DO UPDATE SET clears=excluded.clears, boss_day=excluded.boss_day, boss_used=excluded.boss_used`).run(pl.uid, pl.server_id, chap, stage, prev.clears + 1, today, used);
   return stageState(db, pl, chap, stage);
+}
+// A lost boss fight still uses one of the day's tries (clears stay as they were).
+function stageTried(db, pl, chap, stage) {
+  stageEnsure(db);
+  const today = new Date().toISOString().slice(0, 10);
+  const prev = stageState(db, pl, chap, stage);
+  const row = stageRow(chap, stage) || [];
+  if (!row[38]) return prev;
+  const r = db.prepare('SELECT clears FROM stage_clears WHERE uid=? AND server_id=? AND chap=? AND stage=?').get(pl.uid, pl.server_id, chap, stage);
+  db.prepare(`INSERT INTO stage_clears(uid,server_id,chap,stage,clears,boss_day,boss_used) VALUES(?,?,?,?,?,?,?)
+    ON CONFLICT DO UPDATE SET boss_day=excluded.boss_day, boss_used=excluded.boss_used`).run(pl.uid, pl.server_id, chap, stage, r ? r.clears : 0, today, BOSS_FREE - prev.bossLeft + 1);
+  return stageState(db, pl, chap, stage);
+}
+// The client counts PARTS, not single stages: roundinfo [3] restarts at 1 for every part and the last stage of a part is its
+// boss. It sends StageID = part and Pos = row inside the part, and reads currentstage / stageid as part numbers.
+function chapterParts(chap) {
+  const parts = [];
+  for (const r of table('roundinfo').rows.filter((x) => x[4] === chap).sort((a, b) => a[2] - b[2])) {
+    if (!parts.length || r[3] === 1) parts.push({ first: r[2], count: 0 });
+    parts[parts.length - 1].count++;
+  }
+  return parts;
+}
+// global stage (progress.stage = next open stage, may be one past the chapter's end) -> { part, pos } (1-based)
+function stagePart(chap, g) {
+  const parts = chapterParts(chap);
+  const i = parts.findIndex((p) => g >= p.first && g < p.first + p.count);
+  if (i < 0) return { part: Math.max(1, parts.length), pos: parts.length ? parts[parts.length - 1].count : 1 };
+  return { part: i + 1, pos: g - parts[i].first + 1 };
+}
+function globalStage(chap, part, pos) {
+  const p = chapterParts(chap)[part - 1];
+  return p ? p.first + Math.min(Math.max(1, pos), p.count) - 1 : 0;
+}
+// What the client shows for one part: finished parts are fully open, the current part is open up to `pos`.
+function partEntry(db, pl, chap, part) {
+  const parts = chapterParts(chap), p = parts[part - 1], cur = stagePart(chap, getStage(db, pl.uid, pl.server_id, chap));
+  const pos = part < cur.part ? p.count : cur.pos;
+  const st = stageState(db, pl, chap, p.first + pos - 1);
+  return { pos, pos_time: st.clears, pk_boss_times: st.bossLeft };
 }
 function chapterStages(chap) { return table('roundinfo').rows.filter((r) => r[4] === chap).reduce((m, r) => Math.max(m, r[2]), 1); }
 function furthestChapter(db, uid, sid) {
@@ -892,4 +1232,4 @@ function godSynth(db, pl, attSeq, defSeq) {
   return { ninja: god, seq: giveCard(db, pl.uid, pl.server_id, god) };
 }
 
-module.exports = { maxTeam, stageRow, stageState, stageCleared, chapterStages, furthestChapter, roundInfoXml, teamSwap, grantDrop, mergeChips, mergeAwards, ninjaStats, CHIP_BASE, chipCount, chipbagXml, godSynth, potentialXml, potentialRoll, potentialSave, newlife, NEWLIFE_MAX, NEWLIFE_COST, arenaListXml, arenaRankXml, arenaFight, gateXml, gateOpen, gateLevel, gateBonus, friendsXml, sageGrow, giveEquip, teamStats, awardXml, secretXml, secretBuy, soulOf, equip, strengthen, packBuy, propUse, propCounts, propAdd, shopBuy, actXml, actClaim, sparFight, rivalsXml, rivals, bumpTask, dailyXml, dailyClaim, awardFull, addExp, battleXml, getStage, setStage, pull, pullXml, table, ninjas, ensure, giveCard, ensureStarterTeam, stateXml, cardXml };
+module.exports = { growStarList, GROW_MAX, energyTick, stageTried, stageFoes, npcStats, orderUsedToday, ORDER_DAILY, spState, spUse, clearsNeeded, payHeapXml, payHeapClaim, actEnsure, recruitState, FREE_EVERY, BOSS_COST, chapterParts, stagePart, globalStage, partEntry, maxTeam, stageRow, stageState, stageCleared, chapterStages, furthestChapter, roundInfoXml, teamSwap, grantDrop, mergeChips, mergeAwards, ninjaStats, CHIP_BASE, chipCount, chipbagXml, godSynth, potentialXml, potentialRoll, potentialSave, newlife, NEWLIFE_MAX, NEWLIFE_COST, arenaListXml, arenaRankXml, arenaFight, gateXml, gateOpen, gateLevel, gateBonus, friendsXml, sageGrow, giveEquip, teamStats, awardXml, secretXml, secretBuy, soulOf, equip, strengthen, packBuy, propUse, propCounts, propAdd, shopBuy, actXml, actClaim, sparFight, rivalsXml, rivals, bumpTask, dailyXml, dailyClaim, awardFull, addExp, battleXml, getStage, setStage, pull, pullXml, table, ninjas, ensure, giveCard, ensureStarterTeam, stateXml, cardXml };

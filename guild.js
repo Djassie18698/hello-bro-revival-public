@@ -74,6 +74,43 @@ function buildingsXml(g) {
   return [1, 2, 3, 4, 5].map((i) => `<item${i} level="${g.level}"/>`).join('');
 }
 
+// ---- Buildings (ui_orgUpgradeLayer: rl_w_group_admin Cmd 8 list, Cmd 9 upgrade ConstructID) ----------------------------------
+// construct 1 Akatsuki (= group level: +5 members a level), 2 Mall, 3 Worship (donate), 4 Hall. The original costs are lost: (ours) max level 10,
+// cost 100 x the next level in construction points (the group's score), buildings 1-3 need the Hall at least at their next level.
+const CONSTRUCT_MAX = 10;
+const CONSTRUCT_EFFECT = { 1: 'members +5', 2: 'more goods in the mall', 3: 'more donation rewards', 4: 'raises the level cap of the other buildings' };
+function constructLevels(db, grp) {
+  db.exec('CREATE TABLE IF NOT EXISTS group_construct (group_id INTEGER, cid INTEGER, level INTEGER, PRIMARY KEY(group_id, cid))');
+  const lv = { 1: grp.level || 1, 2: 1, 3: 1, 4: 1 };
+  for (const r of db.prepare('SELECT cid, level FROM group_construct WHERE group_id=?').all(grp.id)) lv[r.cid] = r.level;
+  lv[1] = grp.level || 1;
+  return lv;
+}
+function constructXml(db, grp) {
+  const lv = constructLevels(db, grp);
+  const rows = [1, 2, 3, 4].map((c) => {
+    const max = lv[c] >= CONSTRUCT_MAX ? 1 : 0;
+    const need = c === 4 ? 0 : 4;
+    return `<construct construct_id="${c}" level="${lv[c]}" max_level_flag="${max}" consume_score="${100 * (lv[c] + 1)}" effect_desc="${CONSTRUCT_EFFECT[c]}"` +
+      ` require_construct_id="${need}" require_construct_level="${need ? lv[c] + 1 : 0}"/>`;
+  }).join('');
+  return `<group_info>${el('score', grp.score)}</group_info><construct_list>${rows}</construct_list>`;
+}
+function constructUp(db, pl, cid) {
+  const grp = myGroup(db, pl.uid, pl.server_id);
+  if (!grp) return { error: 'no group' };
+  const lv = constructLevels(db, grp);
+  if (!lv[cid]) return { error: 'no such building' };
+  if (lv[cid] >= CONSTRUCT_MAX) return { error: 'level max' };
+  if (cid !== 4 && lv[4] < lv[cid] + 1) return { error: 'upgrade the hall first' };
+  const cost = 100 * (lv[cid] + 1);
+  if (grp.score < cost) return { error: 'not enough construction points' };
+  db.prepare('UPDATE groups SET score=score-? WHERE id=?').run(cost, grp.id);
+  if (cid === 1) db.prepare('UPDATE groups SET level=level+1 WHERE id=?').run(grp.id);
+  else db.prepare('INSERT INTO group_construct(group_id,cid,level) VALUES(?,?,?) ON CONFLICT(group_id,cid) DO UPDATE SET level=excluded.level').run(grp.id, cid, lv[cid] + 1);
+  return { xml: constructXml(db, db.prepare('SELECT * FROM groups WHERE id=?').get(grp.id)) };
+}
+
 function adminXml(db, pl) {
   const g = myGroup(db, pl.uid, pl.server_id);
   if (!g) return null;
@@ -149,4 +186,4 @@ function donate(db, pl, cash) {
   db.prepare('UPDATE groups SET score=score+? WHERE id=?').run(cash, g.id);
   return {};
 }
-module.exports = { contriXml, donate, rankXml, hallXml, checkin, shopXml, CREATE_COST, ensure, status, listXml, detailXml, create, join, quit, buildingsXml, adminXml, myGroup };
+module.exports = { constructXml, constructUp, contriXml, donate, rankXml, hallXml, checkin, shopXml, CREATE_COST, ensure, status, listXml, detailXml, create, join, quit, buildingsXml, adminXml, myGroup };

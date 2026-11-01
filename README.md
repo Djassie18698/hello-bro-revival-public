@@ -8,6 +8,8 @@ with friends, on a server you run yourself. Free, no payments, everyone can be a
 `Hello Bro v28.0` XAPK (package `com.hello.bro.yo`). The setup script reads the game data
 from it and builds a copy of the app that connects to your server.
 
+**Help, bugs and community:** join our Discord: https://discord.gg/2Cbp4UDHrU
+
 ## What works
 Login, team, backpack, gacha (single and 10x with card reveal), shop, VIP, training (all chapters),
 spar, arena ladder, tower, Akatsuki guilds (create, join, hall, donate, rankings), Eight Gates,

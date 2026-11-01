@@ -7,8 +7,15 @@ const url = require('url');
 const { DatabaseSync } = require('node:sqlite');
 const handlers = require('./handlers');
 const admin = require('./admin');
+const settings = require('./settings');
+const manager = require('./manager');
 
 const PORT = process.env.PORT || 18080;
+// Everything printed also goes to the Server Manager's live log.
+for (const k of ['log', 'error']) {
+  const orig = console[k].bind(console);
+  console[k] = (...a) => { settings.addLog(k === 'error' ? 'error' : 'info', a.map((x) => (x && x.stack) || String(x)).join(' ')); orig(...a); };
+}
 // Safety copy of the save on every start (keeps the last 10) in backups/.
 try {
   const fs = require('fs'), path = require('path');
@@ -64,6 +71,9 @@ const httpServer = http.createServer({ insecureHTTPParser: true }, async (req, r
     resp.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': fs.statSync(file).size });
     return fs.createReadStream(file).pipe(resp);
   }
+  if (u.pathname === '/manager' || u.pathname.startsWith('/manager/')) {
+    try { return await manager(req, resp, u, db, parseBody); } catch (e) { logError('manager error', e); resp.writeHead(500); return resp.end('error'); }
+  }
   if (u.pathname.startsWith('/admin')) {
     try { return await admin(req, resp, u, db, parseBody); } catch (e) { logError('admin error', e); resp.writeHead(500); return resp.end('error'); }
   }
@@ -71,6 +81,7 @@ const httpServer = http.createServer({ insecureHTTPParser: true }, async (req, r
   const params = { ...u.query, ...Object.fromEntries(new URLSearchParams(body)) };
   const cgi = u.pathname.replace(/^\/+/, '');
   const h = handlers[cgi];
+  settings.hit(params.Uid, cgi);
   let out;
   try {
     out = h ? h({ db, params, cgi, host: req.headers.host }) : null;
@@ -79,10 +90,10 @@ const httpServer = http.createServer({ insecureHTTPParser: true }, async (req, r
     out = null;
   }
   if (out == null) {
-    console.log(`[UNHANDLED] ${req.method} ${req.url} ${body}`);
+    console.log(`\x1b[33m[UNHANDLED] ${req.method} ${req.url} ${body}\x1b[0m`);
     out = '<root code="1"><message>not implemented</message></root>';
   } else {
-    console.log(`[ok] ${cgi} Cmd=${params.Cmd || ''}`);
+    console.log(`\x1b[90m[ok] ${cgi} Cmd=${params.Cmd || ''}\x1b[0m`); // grey: game requests
   }
   resp.writeHead(200, { 'Content-Type': 'text/xml; charset=utf-8' });
   // The Lua side looks for a <RENLONG> root; the C++ side accepts any root name.
@@ -108,4 +119,4 @@ net.createServer((sock) => {
     httpServer.emit('connection', sock);
     sock.on('error', () => {});
   });
-}).on('error', (e) => console.error('listen error', e.message)).listen(PORT, '0.0.0.0', () => console.log(`Hello Bro server on :${PORT}`));
+}).on('error', (e) => console.error('listen error', e.message)).listen(PORT, '0.0.0.0', () => manager.banner(PORT, db));

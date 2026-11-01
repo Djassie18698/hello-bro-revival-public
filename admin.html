@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hello Bro Admin</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bangers&family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0b0a14; --panel:rgba(24,22,40,.72); --panel2:rgba(36,32,60,.75); --line:rgba(255,255,255,.08);
+  --text:#f3f1ff; --muted:#a39fc0; --orange:#ff8a1f; --orange2:#ffb648; --red:#ff3d5a; --purple:#8b5cf6; --cyan:#22d3ee; --green:#34d399;
+  --r:18px;
+}
+*{box-sizing:border-box}
+html,body{margin:0;min-height:100%;background:var(--bg);color:var(--text);font-family:Inter,system-ui,sans-serif}
+body{overflow-x:hidden}
+/* animated backdrop */
+.bg{position:fixed;inset:0;z-index:-1;overflow:hidden;background:radial-gradient(1200px 700px at 10% -10%,#3b1d5c 0%,transparent 60%),radial-gradient(900px 600px at 110% 10%,#5c2a0f 0%,transparent 55%),var(--bg)}
+.orb{position:absolute;border-radius:50%;filter:blur(70px);opacity:.55;animation:float 18s ease-in-out infinite}
+.orb.a{width:420px;height:420px;background:#ff7a18;left:-120px;top:40%}
+.orb.b{width:520px;height:520px;background:#7c3aed;right:-160px;top:-120px;animation-delay:-6s}
+.orb.c{width:300px;height:300px;background:#06b6d4;left:45%;bottom:-140px;animation-delay:-12s}
+@keyframes float{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(40px,-30px) scale(1.12)}}
+.leaf{position:absolute;font-size:22px;opacity:.12;animation:drift linear infinite}
+@keyframes drift{from{transform:translateY(-10vh) rotate(0)}to{transform:translateY(110vh) rotate(360deg)}}
+
+.wrap{max-width:1320px;margin:0 auto;padding:28px 20px 60px}
+header{display:flex;align-items:center;gap:18px;margin-bottom:22px}
+.logo{width:64px;height:64px;border-radius:20px;display:grid;place-items:center;font-size:34px;background:linear-gradient(135deg,var(--orange),var(--red));box-shadow:0 10px 40px rgba(255,90,40,.45),inset 0 1px 0 rgba(255,255,255,.4);animation:spin 12s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+h1{font-family:Bangers,Impact,sans-serif;font-size:46px;letter-spacing:2px;margin:0;line-height:1;background:linear-gradient(90deg,#fff 0%,var(--orange2) 45%,var(--orange) 70%,#ff5f6d 100%);-webkit-background-clip:text;background-clip:text;color:transparent;text-shadow:0 0 40px rgba(255,140,40,.25)}
+.sub{color:var(--muted);font-size:13px;margin-top:4px}
+.pill{margin-left:auto;display:flex;gap:10px;align-items:center;font-size:12px;color:var(--muted);background:var(--panel);border:1px solid var(--line);padding:10px 14px;border-radius:999px;backdrop-filter:blur(14px)}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--green);box-shadow:0 0 12px var(--green);animation:pulse 2s infinite}
+@keyframes pulse{50%{opacity:.35}}
+
+.grid{display:grid;grid-template-columns:320px 1fr;gap:20px}
+@media(max-width:900px){.grid{grid-template-columns:1fr}h1{font-size:34px}.pill{display:none}}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);backdrop-filter:blur(18px);box-shadow:0 20px 60px rgba(0,0,0,.35)}
+
+/* players */
+.players{padding:16px;position:sticky;top:20px;max-height:calc(100vh - 40px);display:flex;flex-direction:column}
+.players h3{margin:2px 4px 12px;font-size:13px;text-transform:uppercase;letter-spacing:2px;color:var(--muted)}
+.search{width:100%;padding:12px 14px 12px 40px;border-radius:14px;border:1px solid var(--line);background:rgba(0,0,0,.25) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' fill='none' stroke='%23a39fc0' stroke-width='2'%3E%3Ccircle cx='8' cy='8' r='6'/%3E%3Cpath d='M13 13l4 4'/%3E%3C/svg%3E") 13px 50% no-repeat;color:var(--text);font-size:14px;outline:none;transition:.2s}
+.search:focus{border-color:var(--orange);box-shadow:0 0 0 4px rgba(255,138,31,.15)}
+.plist{overflow:auto;margin-top:12px;display:flex;flex-direction:column;gap:8px;padding-right:4px}
+.pcard{display:flex;gap:12px;align-items:center;padding:12px;border-radius:14px;border:1px solid transparent;cursor:pointer;transition:.18s;background:rgba(255,255,255,.02)}
+.pcard:hover{background:rgba(255,255,255,.06);transform:translateX(3px)}
+.pcard.on{border-color:rgba(255,138,31,.6);background:linear-gradient(135deg,rgba(255,138,31,.18),rgba(139,92,246,.12));box-shadow:0 8px 30px rgba(255,120,30,.2)}
+.av{width:44px;height:44px;border-radius:13px;display:grid;place-items:center;font-weight:800;font-size:18px;color:#fff;flex:none}
+.pname{font-weight:700;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pmeta{font-size:11px;color:var(--muted);margin-top:2px}
+.vip{font-size:10px;font-weight:800;padding:2px 6px;border-radius:6px;background:linear-gradient(90deg,#f59e0b,#ef4444);color:#fff;margin-left:6px}
+
+/* hero */
+.hero{padding:22px;display:flex;flex-direction:column;gap:18px;overflow:hidden;position:relative}
+.hero:before{content:"";position:absolute;inset:-1px;border-radius:var(--r);padding:1px;background:linear-gradient(120deg,rgba(255,138,31,.6),transparent 35%,transparent 65%,rgba(139,92,246,.6));-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;pointer-events:none}
+.who{display:flex;align-items:center;gap:16px}
+.who .av{width:62px;height:62px;font-size:26px;border-radius:18px}
+.who h2{margin:0;font-size:26px}
+.who .pmeta{font-size:13px}
+.stats{display:grid;grid-template-columns:repeat(6,1fr);gap:12px}
+@media(max-width:1100px){.stats{grid-template-columns:repeat(3,1fr)}}
+.stat{background:rgba(0,0,0,.22);border:1px solid var(--line);border-radius:14px;padding:14px}
+.stat b{display:block;font-size:22px;font-weight:800;margin-top:4px;font-variant-numeric:tabular-nums}
+.stat span{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:1.5px}
+.note{display:flex;gap:10px;align-items:flex-start;font-size:13px;color:#ffe6c7;background:linear-gradient(90deg,rgba(255,138,31,.16),rgba(255,138,31,.04));border:1px solid rgba(255,138,31,.3);padding:12px 14px;border-radius:12px}
+
+/* tabs */
+.tabs{display:flex;gap:6px;margin:20px 0 14px;flex-wrap:wrap}
+.tab{padding:11px 16px;border-radius:12px;border:1px solid var(--line);background:var(--panel);color:var(--muted);font-weight:700;font-size:14px;cursor:pointer;transition:.18s;backdrop-filter:blur(12px)}
+.tab:hover{color:var(--text)}
+.tab.on{color:#1a0f02;background:linear-gradient(135deg,var(--orange2),var(--orange));border-color:transparent;box-shadow:0 10px 30px rgba(255,138,31,.35)}
+.view{display:none;padding:20px;animation:in .25s ease}
+.view.on{display:block}
+@keyframes in{from{opacity:0;transform:translateY(6px)}}
+.view h3{margin:0 0 4px;font-size:18px}
+.hint{color:var(--muted);font-size:13px;margin:0 0 16px}
+
+/* controls */
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+input[type=number],select,.in{padding:11px 13px;border-radius:12px;border:1px solid var(--line);background:rgba(0,0,0,.28);color:var(--text);font-size:14px;outline:none}
+input[type=number]:focus,select:focus,.in:focus{border-color:var(--orange)}
+.btn{border:0;cursor:pointer;font-weight:800;font-size:14px;padding:12px 18px;border-radius:12px;color:#1a0f02;background:linear-gradient(135deg,var(--orange2),var(--orange));box-shadow:0 8px 24px rgba(255,138,31,.3);transition:.15s;white-space:nowrap}
+.btn:hover{transform:translateY(-2px);box-shadow:0 12px 30px rgba(255,138,31,.45)}
+.btn:active{transform:translateY(0)}
+.btn.ghost{background:rgba(255,255,255,.06);color:var(--text);box-shadow:none;border:1px solid var(--line)}
+.btn.ghost:hover{background:rgba(255,255,255,.12)}
+.btn.purple{background:linear-gradient(135deg,#a78bfa,#7c3aed);color:#fff;box-shadow:0 8px 24px rgba(124,58,237,.35)}
+.btn.danger{background:linear-gradient(135deg,#ff6b81,#e11d48);color:#fff;box-shadow:0 8px 24px rgba(225,29,72,.35)}
+.btn.sm{padding:8px 12px;font-size:12px;border-radius:10px}
+
+.quick{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-bottom:18px}
+.qb{padding:16px 12px;border-radius:14px;border:1px solid var(--line);background:rgba(255,255,255,.03);color:var(--text);cursor:pointer;text-align:left;transition:.18s}
+.qb:hover{background:rgba(255,138,31,.12);border-color:rgba(255,138,31,.5);transform:translateY(-3px)}
+.qb .e{font-size:22px}
+.qb b{display:block;margin-top:6px;font-size:15px}
+.qb small{color:var(--muted);font-size:11px}
+
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+.chip{padding:8px 13px;border-radius:999px;border:1px solid var(--line);background:rgba(255,255,255,.03);color:var(--muted);font-size:13px;font-weight:600;cursor:pointer;transition:.15s}
+.chip:hover{color:var(--text)}
+.chip.on{color:#fff;background:linear-gradient(135deg,rgba(255,138,31,.5),rgba(139,92,246,.45));border-color:transparent}
+.count{color:var(--muted);font-size:12px;margin:6px 0 12px}
+
+.items{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px}
+.it{position:relative;padding:14px;border-radius:14px;background:rgba(0,0,0,.22);border:1px solid var(--line);display:flex;flex-direction:column;gap:8px;transition:.18s;overflow:hidden}
+.it:hover{transform:translateY(-3px);border-color:rgba(255,255,255,.18);box-shadow:0 14px 30px rgba(0,0,0,.35)}
+.it:after{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--rar,#64748b)}
+.it .n{font-weight:700;font-size:14px;line-height:1.25}
+.it .m{font-size:11px;color:var(--muted);display:flex;gap:8px;align-items:center}
+.stars{color:#fbbf24;letter-spacing:1px;font-size:12px}
+.tag{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:1px;padding:3px 7px;border-radius:6px;background:rgba(255,255,255,.08)}
+.it .act{display:flex;gap:6px;margin-top:auto}
+.it input{width:64px;padding:8px;border-radius:10px;border:1px solid var(--line);background:rgba(0,0,0,.3);color:var(--text);font-size:13px}
+.it .btn{flex:1;padding:9px}
+
+.bulk{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}
+.bk{padding:18px;border-radius:16px;border:1px solid var(--line);background:linear-gradient(160deg,rgba(255,255,255,.05),rgba(255,255,255,.01));display:flex;flex-direction:column;gap:12px}
+.bk .e{font-size:30px}
+.bk b{font-size:17px}
+.bk small{color:var(--muted);font-size:12px;margin-top:-6px}
+
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{padding:10px 8px;border-bottom:1px solid var(--line);text-align:left}
+th{color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:1px}
+tr:hover td{background:rgba(255,255,255,.03)}
+.two{display:grid;grid-template-columns:1.4fr 1fr;gap:18px}
+@media(max-width:1000px){.two{grid-template-columns:1fr}}
+.scroll{max-height:520px;overflow:auto}
+
+.danger-box{border:1px solid rgba(225,29,72,.45);background:linear-gradient(135deg,rgba(225,29,72,.14),rgba(225,29,72,.03));border-radius:16px;padding:20px}
+
+#toasts{position:fixed;right:20px;bottom:20px;display:flex;flex-direction:column;gap:10px;z-index:9}
+.toast{min-width:260px;max-width:380px;padding:14px 16px;border-radius:14px;background:rgba(20,18,34,.92);border:1px solid var(--line);backdrop-filter:blur(14px);box-shadow:0 18px 40px rgba(0,0,0,.45);display:flex;gap:10px;align-items:flex-start;font-size:14px;animation:tin .3s cubic-bezier(.2,1.4,.4,1)}
+.toast.ok{border-color:rgba(52,211,153,.5)}
+.toast.err{border-color:rgba(255,61,90,.6)}
+@keyframes tin{from{opacity:0;transform:translateX(40px) scale(.9)}}
+::-webkit-scrollbar{width:8px;height:8px}::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:8px}
+.empty{color:var(--muted);text-align:center;padding:40px 10px}
+</style>
+</head>
+<body>
+<div class="bg"><div class="orb a"></div><div class="orb b"></div><div class="orb c"></div></div>
+<div class="wrap">
+  <header>
+    <div class="logo">🍥</div>
+    <div><h1>HELLO BRO · ADMIN</h1><div class="sub">Give anything to any player on this server</div></div>
+    <a class="pill" href="/manager" style="text-decoration:none"><span class="dot"></span><span id="srv">Server online · open Server Manager</span></a>
+  </header>
+
+  <div class="grid">
+    <aside class="panel players">
+      <h3>Players</h3>
+      <input class="search" id="pq" placeholder="Find a player…" oninput="renderPlayers()">
+      <div class="plist" id="plist"></div>
+    </aside>
+
+    <main>
+      <section class="panel hero" id="hero"></section>
+
+      <nav class="tabs">
+        <button class="tab on" data-v="res">⚡ Resources</button>
+        <button class="tab" data-v="give">🎁 Give</button>
+        <button class="tab" data-v="bulk">📦 Give everything</button>
+        <button class="tab" data-v="inv">🎒 Inventory</button>
+        <button class="tab" data-v="danger">⚠️ Reset</button>
+      </nav>
+
+      <section class="panel view on" id="v-res">
+        <h3>Resources</h3>
+        <p class="hint">One click adds it straight away. Gold, silver and energy show the next time the player opens a screen.</p>
+        <div class="quick" id="quick"></div>
+        <div class="row">
+          <select id="field">
+            <option value="gold">💰 Add gold</option><option value="coin">🪙 Add silver</option><option value="energy">⚡ Add energy</option>
+            <option value="level">⭐ Set level</option><option value="vip">👑 Set VIP (0-18)</option>
+            <option value="souls">👻 Add ninja souls</option><option value="renown">🏆 Add arena reputation</option>
+          </select>
+          <input type="number" id="amount" value="10000" style="width:150px">
+          <button class="btn" onclick="give($('field').value, +$('amount').value)">Apply</button>
+        </div>
+      </section>
+
+      <section class="panel view" id="v-give">
+        <h3>Give one thing</h3>
+        <p class="hint">Pick a type, search, set how many, press Give.</p>
+        <div class="chips" id="cats"></div>
+        <div class="chips" id="starchips"></div>
+        <div class="row" style="margin-bottom:6px"><input class="in" id="q" placeholder="Search… (Naruto, Sword, Ramen, Shukaku…)" style="flex:1;min-width:220px" oninput="debounceSearch()"></div>
+        <div class="row" style="margin:6px 0 2px">
+          <span class="hint" style="margin:0">Cards arrive at</span>
+          <label class="hint" style="margin:0">Level <input type="number" id="glv" value="1" min="1" max="50" style="width:80px"></label>
+          <label class="hint" style="margin:0">Rebirth <input type="number" id="gnl" value="0" min="0" max="8" style="width:70px"></label>
+          <label class="hint" style="margin:0">Growth <input type="number" id="ggr" value="0" min="0" max="15" style="width:70px"></label>
+          <button class="btn ghost sm" onclick="$('glv').value=50;$('gnl').value=8;$('ggr').value=15">Max</button>
+          <button class="btn ghost sm" onclick="$('glv').value=1;$('gnl').value=0;$('ggr').value=0">Reset</button>
+          <span class="hint" style="margin:0">(shinobi rebirth 0-8 and growth 0-15, equipment rebirth 0-3, ninjutsu and seals level only)</span>
+        </div>
+        <div class="count" id="ccount"></div>
+        <div class="items" id="items"></div>
+      </section>
+
+      <section class="panel view" id="v-bulk">
+        <h3>Give everything</h3>
+        <p class="hint">Gives one (or more) of every thing in a group. Narrow it with a star level if the group is big.</p>
+        <div class="row" style="margin-bottom:14px"><span class="hint" style="margin:0">Cards arrive at</span>
+          <label class="hint" style="margin:0">Level <input type="number" id="blv" value="1" min="1" max="50" style="width:80px"></label>
+          <label class="hint" style="margin:0">Rebirth <input type="number" id="bnl" value="0" min="0" max="8" style="width:70px"></label>
+          <label class="hint" style="margin:0">Growth <input type="number" id="bgr" value="0" min="0" max="15" style="width:70px"></label>
+          <button class="btn ghost sm" onclick="$('blv').value=50;$('bnl').value=8;$('bgr').value=15">Max</button></div>
+        <div class="bulk" id="bulk"></div>
+      </section>
+
+      <section class="panel view" id="v-inv">
+        <h3>Inventory</h3>
+        <p class="hint">What the selected player owns on the server right now.</p>
+        <div class="two">
+          <div><div class="row" style="justify-content:space-between;margin-bottom:8px"><b id="ccards">Cards</b><input class="in" id="iq" placeholder="Filter…" oninput="renderInv()" style="width:180px"></div>
+            <div class="scroll"><table id="tcards"></table></div></div>
+          <div><b>Items</b><div class="scroll" style="margin-top:8px"><table id="tprops"></table></div></div>
+        </div>
+      </section>
+
+      <section class="panel view" id="v-danger">
+        <div class="danger-box">
+          <h3>Reset this player</h3>
+          <p class="hint">Deletes their character, cards, items and progress. Their login stays: next time they press START they make a new character. A backup of the save is written to the <b>backups</b> folder first.</p>
+          <button class="btn danger" onclick="resetPlayer()">Reset selected player</button>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+<div id="toasts"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const fmt = (n) => Number(n || 0).toLocaleString('en-US');
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+async function api(p, b) { const r = await fetch('/admin/api/' + p, b ? { method: 'POST', body: JSON.stringify(b) } : {}); return r.json(); }
+function toast(text, ok = true) {
+  const t = document.createElement('div'); t.className = 'toast ' + (ok ? 'ok' : 'err');
+  t.innerHTML = '<span>' + (ok ? '✅' : '⛔') + '</span><div>' + text + '</div>'; $('toasts').appendChild(t);
+  setTimeout(() => { t.style.transition = '.4s'; t.style.opacity = 0; t.style.transform = 'translateX(30px)'; setTimeout(() => t.remove(), 400); }, 3600);
+}
+const GRAD = ['#ff8a1f,#ff3d5a', '#8b5cf6,#ec4899', '#06b6d4,#3b82f6', '#22c55e,#14b8a6', '#f59e0b,#ef4444', '#a855f7,#6366f1'];
+const avatar = (p) => '<div class="av" style="background:linear-gradient(135deg,' + GRAD[p.uid % GRAD.length] + ')">' + esc((p.nick || '?')[0].toUpperCase()) + '</div>';
+const RAR = { 1: '#94a3b8', 2: '#22c55e', 3: '#3b82f6', 4: '#a855f7', 5: '#f59e0b', 6: '#ef4444' };
+const CATS = [['', '✨ All'], ['ninja', '🥷 Shinobi'], ['equip', '⚔️ Equipment'], ['ninjutsu', '🌀 Ninjutsu'], ['seal', '🔱 Seals'], ['item', '🍜 Items'], ['fragment', '🧩 Fragments'], ['pet', '🐸 Pets']];
+const CATNAME = Object.fromEntries(CATS);
+
+let players = [], sel = null, cat = '', stars = 0, inv = { cards: [], props: [] };
+
+async function loadPlayers() {
+  players = await api('players');
+  if (!sel && players.length) sel = players[0].uid;
+  renderPlayers(); renderHero();
+}
+function renderPlayers() {
+  const q = $('pq').value.toLowerCase();
+  const list = players.filter((p) => !q || (p.nick + ' ' + p.uid).toLowerCase().includes(q));
+  $('plist').innerHTML = list.map((p) => '<div class="pcard' + (p.uid === sel ? ' on' : '') + '" onclick="pick(' + p.uid + ')">' + avatar(p) +
+    '<div style="min-width:0"><div class="pname">' + esc(p.nick) + (p.vip ? '<span class="vip">VIP ' + p.vip + '</span>' : '') + '</div>' +
+    '<div class="pmeta">Lv ' + p.level + ' · ' + fmt(p.gold) + ' gold · #' + p.uid + '</div></div></div>').join('') || '<div class="empty">No players yet</div>';
+}
+function pick(uid) { sel = uid; renderPlayers(); renderHero(); if ($('v-inv').classList.contains('on')) loadInv(); }
+function current() { return players.find((p) => p.uid === sel); }
+function renderHero() {
+  const p = current();
+  if (!p) { $('hero').innerHTML = '<div class="empty">Nobody has made a character on this server yet.</div>'; return; }
+  const s = (k, v) => '<div class="stat"><span>' + k + '</span><b>' + v + '</b></div>';
+  $('hero').innerHTML = '<div class="who">' + avatar(p) + '<div><h2>' + esc(p.nick) + '</h2><div class="pmeta">Player #' + p.uid + ' · server ' + p.server_id + '</div></div></div>' +
+    '<div class="stats">' + s('Level', p.level) + s('VIP', p.vip) + s('Gold', fmt(p.gold)) + s('Silver', fmt(p.coin)) + s('Energy', fmt(p.energy)) + s('Cards', fmt(p.cards)) + '</div>' +
+    '<div class="note">💡 <div><b>New cards, equipment and pets only show after the game is closed completely</b> (swipe it away in the recent-apps list) and opened again. The game reads your cards only when it starts.</div></div>';
+}
+
+const QUICK = [['💰', 'gold', 1000, '+1,000 gold'], ['💰', 'gold', 10000, '+10,000 gold'], ['🪙', 'coin', 100000, '+100,000 silver'], ['🪙', 'coin', 1000000, '+1,000,000 silver'],
+  ['⚡', 'energy', 100, '+100 energy'], ['👻', 'souls', 10000, '+10,000 souls'], ['👑', 'vip', 10, 'Set VIP 10'], ['⭐', 'level', 60, 'Set level 60']];
+$('quick').innerHTML = QUICK.map(([e, f, a, t]) => '<button class="qb" onclick="give(\'' + f + '\',' + a + ')"><div class="e">' + e + '</div><b>' + t + '</b><small>one click</small></button>').join('');
+async function give(field, amount) {
+  if (!sel) return toast('Pick a player first', false);
+  const r = await api('give', { uid: sel, field, amount });
+  toast(r.ok ? 'Done for <b>' + esc(current().nick) + '</b>' : r.error, r.ok); loadPlayers();
+}
+
+$('cats').innerHTML = CATS.map(([k, t]) => '<button class="chip' + (k === cat ? ' on' : '') + '" data-c="' + k + '">' + t + '</button>').join('');
+$('starchips').innerHTML = '<button class="chip on" data-s="0">Any stars</button>' + [1, 2, 3, 4, 5, 6].map((s) => '<button class="chip" data-s="' + s + '">' + '★'.repeat(s) + '</button>').join('');
+$('cats').onclick = (e) => { const b = e.target.closest('.chip'); if (!b) return; cat = b.dataset.c; [...$('cats').children].forEach((x) => x.classList.toggle('on', x === b)); search(); };
+$('starchips').onclick = (e) => { const b = e.target.closest('.chip'); if (!b) return; stars = +b.dataset.s; [...$('starchips').children].forEach((x) => x.classList.toggle('on', x === b)); search(); };
+let tmr; function debounceSearch() { clearTimeout(tmr); tmr = setTimeout(search, 180); }
+async function search() {
+  const d = await api('catalog?cat=' + cat + '&stars=' + stars + '&q=' + encodeURIComponent($('q').value));
+  $('ccount').textContent = d.total + ' found' + (d.total > d.items.length ? ' · showing ' + d.items.length + ', search to narrow it down' : '');
+  $('items').innerHTML = d.items.map((x) => '<div class="it" style="--rar:' + (RAR[x.stars] || '#64748b') + '"><div class="n">' + esc(x.name) + '</div>' +
+    '<div class="m"><span class="tag">' + (CATNAME[x.cat] || x.cat) + '</span>' + (x.stars ? '<span class="stars">' + '★'.repeat(x.stars) + '</span>' : '') + (x.sub ? '<span>' + esc(x.sub) + '</span>' : '') + '</div>' +
+    '<div class="act"><input type="number" min="1" value="1" id="n-' + x.cat + '-' + x.id + '"><button class="btn sm" onclick="giveThing(\'' + x.cat + '\',' + x.id + ')">Give</button></div></div>').join('') || '<div class="empty">Nothing matches.</div>';
+}
+async function giveThing(c, id) {
+  if (!sel) return toast('Pick a player first', false);
+  const n = +$('n-' + c + '-' + id).value || 1;
+  const r = await api('givething', { uid: sel, cat: c, id, count: n, level: +$('glv').value || 1, newlife: +$('gnl').value || 0, growth: +$('ggr').value || 0 });
+  toast(r.ok ? 'Gave <b>' + r.given + '× ' + esc(r.name) + '</b> to ' + esc(current().nick) + (['ninja', 'equip', 'ninjutsu', 'seal', 'pet'].includes(c) ? '<br><small>Restart the game to see it.</small>' : '') : r.error, r.ok);
+  loadPlayers();
+}
+
+const BULK = [['ninja', '🥷', 'Every shinobi card'], ['equip', '⚔️', 'Every piece of equipment'], ['ninjutsu', '🌀', 'Every ninjutsu'], ['seal', '🔱', 'Every seal'],
+  ['item', '🍜', 'Every item'], ['fragment', '🧩', 'Every fragment'], ['pet', '🐸', 'Every pet']];
+$('bulk').innerHTML = BULK.map(([c, e, t]) => '<div class="bk"><div class="e">' + e + '</div><b>' + t + '</b><small id="bc-' + c + '">&nbsp;</small>' +
+  '<div class="row"><select id="bs-' + c + '"><option value="0">All stars</option>' + [1, 2, 3, 4, 5, 6].map((s) => '<option value="' + s + '">' + s + ' ★ only</option>').join('') + '</select>' +
+  '<input type="number" id="bn-' + c + '" value="' + (c === 'item' || c === 'fragment' ? 50 : 1) + '" min="1" style="width:80px"></div>' +
+  '<button class="btn purple" onclick="bulk(\'' + c + '\')">Give all</button></div>').join('');
+(async () => { for (const [c] of BULK) { const d = await api('catalog?cat=' + c); $('bc-' + c).textContent = d.total + ' different'; } })();
+async function bulk(c) {
+  if (!sel) return toast('Pick a player first', false);
+  const st = +$('bs-' + c).value, n = +$('bn-' + c).value || 1;
+  if (!confirm('Give ' + n + '× of every ' + (st ? st + '-star ' : '') + (CATNAME[c] || c).replace(/^\S+ /, '') + ' to ' + current().nick + '?')) return;
+  const r = await api('bulk', { uid: sel, cat: c, stars: st, count: n, level: +$('blv').value || 1, newlife: +$('bnl').value || 0, growth: +$('bgr').value || 0 });
+  toast(r.ok ? 'Gave <b>' + fmt(r.given) + '</b> things (' + r.kinds + ' different) to ' + esc(current().nick) + '<br><small>Restart the game to see cards.</small>' : r.error, r.ok);
+  loadPlayers();
+}
+
+async function loadInv() { if (!sel) return; inv = await api('inventory?uid=' + sel); renderInv(); }
+function renderInv() {
+  const q = $('iq').value.toLowerCase();
+  const cards = inv.cards.filter((c) => !q || (c.name + ' ' + c.kind).toLowerCase().includes(q));
+  $('ccards').textContent = 'Cards (' + inv.cards.length + ')';
+  $('tcards').innerHTML = '<tr><th>Type</th><th>Name</th><th>Lv</th><th>Rebirth</th><th>Growth</th><th></th></tr>' + cards.map((c) => '<tr><td><span class="tag">' + c.kind + '</span></td><td>' + esc(c.name) + '</td>' +
+    '<td><input type="number" id="lv-' + c.seq + '" value="' + c.level + '" min="1" max="50" style="width:64px;padding:6px"></td>' +
+    '<td><input type="number" id="nl-' + c.seq + '" value="' + c.newlife + '" min="0" max="8" style="width:56px;padding:6px"' + (c.cat === 'ninja' || c.cat === 'equip' ? '' : ' disabled') + '></td>' +
+    '<td><input type="number" id="gr-' + c.seq + '" value="' + c.growth + '" min="0" max="15" style="width:56px;padding:6px"' + (c.cat === 'ninja' ? '' : ' disabled') + '></td>' +
+    '<td style="text-align:right;white-space:nowrap"><button class="btn sm" onclick="saveCard(' + c.seq + ')">Save</button> <button class="btn ghost sm" onclick="delCard(' + c.seq + ')">Remove</button></td></tr>').join('');
+  $('tprops').innerHTML = '<tr><th>Item</th><th>Count</th><th></th></tr>' + inv.props.map((p) => '<tr><td>' + esc(p.name) + '</td>' +
+    '<td><input type="number" min="0" id="pc-' + p.id + '" value="' + p.count + '" style="width:110px;padding:6px"></td>' +
+    '<td style="text-align:right"><button class="btn sm" onclick="saveProp(' + p.id + ')">Save</button></td></tr>').join('') ||
+    '<tr><td colspan="3" class="hint">No items yet. Give one in the Give tab first.</td></tr>';
+}
+async function saveProp(id) {
+  const r = await api('setprop', { uid: sel, id, count: +$('pc-' + id).value });
+  toast(r.ok ? 'Amount set to <b>' + fmt(r.count) + '</b><br><small>Reopen the screen in game to see it.</small>' : r.error, r.ok); loadInv();
+}
+async function saveCard(seq) {
+  const r = await api('setcard', { uid: sel, seq, level: +$('lv-' + seq).value, newlife: +$('nl-' + seq).value, growth: +$('gr-' + seq).value });
+  toast(r.ok ? 'Saved: level ' + r.level + ', rebirth ' + r.newlife + (r.growth != null ? ', growth ' + r.growth : '') + '<br><small>Restart the game to see it.</small>' : r.error, r.ok); loadInv();
+}
+async function delCard(seq) {
+  if (!confirm('Remove this card from ' + current().nick + '?')) return;
+  const r = await api('delcard', { uid: sel, seq }); toast(r.ok ? 'Card removed' : r.error, r.ok); loadInv(); loadPlayers();
+}
+async function resetPlayer() {
+  const p = current(); if (!p) return;
+  if (!confirm('Reset ' + p.nick + '? Their character and everything they own will be deleted.')) return;
+  if (prompt('Type the name to confirm: ' + p.nick) !== p.nick) return toast('Name did not match, nothing was reset', false);
+  const r = await api('reset', { uid: sel }); toast(r.ok ? 'Player reset. They should close and reopen the game.' : r.error, r.ok); sel = null; loadPlayers();
+}
+
+document.querySelector('.tabs').onclick = (e) => {
+  const b = e.target.closest('.tab'); if (!b) return;
+  document.querySelectorAll('.tab').forEach((x) => x.classList.toggle('on', x === b));
+  document.querySelectorAll('.view').forEach((v) => v.classList.toggle('on', v.id === 'v-' + b.dataset.v));
+  if (b.dataset.v === 'inv') loadInv();
+};
+// drifting leaves
+for (let i = 0; i < 14; i++) { const l = document.createElement('div'); l.className = 'leaf'; l.textContent = ['🍃', '🍥', '✦'][i % 3]; l.style.left = Math.random() * 100 + 'vw'; l.style.animationDuration = 14 + Math.random() * 18 + 's'; l.style.animationDelay = -Math.random() * 30 + 's'; document.querySelector('.bg').appendChild(l); }
+loadPlayers(); search();
+setInterval(loadPlayers, 15000);
+</script>
+</body>
+</html>

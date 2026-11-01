@@ -58,23 +58,76 @@ function accountBySession(db, p, isLogin = false) {
 // Training stage fight: always a win for now; rewards come from roundinfo (cols: 22 energy cost, 23 exp, 24 coins).
 // Training stage: roundinfo row with [4] = chapter and [2] = stage number in it. [42] = clears needed before the next
 // stage opens (the "Progress 0/2" on screen), [38] = boss stage, [43] = boss tries per day ("Challenges left").
-function trainingFight(db, pl, chap, stage) {
+function trainingFight(db, pl, chap, part, pos, buy) {
+  pl.energy = game.energyTick(db, pl).energy;
+  const stage = game.globalStage(chap, part, pos); // the client sends the part number and the row inside it
   const row = game.stageRow(chap, stage) || [];
-  if (game.getStage(db, pl.uid, pl.server_id, chap) < stage) return '<root code="5"><message>stage not open yet</message></root>';
+  // a chapter only opens once the previous one is cleared (a chapter without a progress row has never been opened)
+  const opened = db.prepare('SELECT 1 FROM progress WHERE uid=? AND server_id=? AND chap=?').get(pl.uid, pl.server_id, chap);
+  if (!stage || (chap > 1 && !opened) || game.getStage(db, pl.uid, pl.server_id, chap) < stage) return '<root code="5"><message>stage not open yet</message></root>';
   const st = game.stageState(db, pl, chap, stage);
-  if (row[38] && st.bossLeft <= 0) return '<root code="5"><message>no challenges left today</message></root>';
+  if (row[38] && st.bossLeft <= 0) { // free tries used up: the button now costs gold (the client sends WastCashBoss=1 when it is tapped)
+    if (!buy) return '<root code="5"><message>no challenges left today</message></root>';
+    if (pl.gold < game.BOSS_COST) return '<root code="5"><message>not enough gold</message></root>';
+    db.prepare('UPDATE players SET gold=gold-? WHERE uid=? AND server_id=?').run(game.BOSS_COST, pl.uid, pl.server_id);
+  }
   const cost = row[22] || 3, exp = row[23] || 6, coin = row[24] || 15;
-  const lv = game.addExp(db, pl, exp);
+  // Real enemies for this stage and a real result: my team's power against theirs, with some luck (ours: 0.85-1.15). A lost fight costs the
+  // energy (and a boss try) but gives nothing and opens nothing.
+  const foes = game.stageFoes(chap, stage);
+  const ts = game.teamStats(db, pl.uid, pl.server_id);
+  const myPower = ts.slots.reduce((t, s) => t + (s.al + s.ah) / 2 + (s.dl + s.dh) / 2, 0);
+  const theirPower = foes.reduce((t, f) => t + f.power, 0);
+  // Only boss rows are real fights: normal rows are story stages (the client skips the fight and spins the wheel, crediting exp/silver itself),
+  // so they always count as won.
+  const won = !row[38] || (process.env.HB_PVE ? process.env.HB_PVE === 'win' : !foes.length || myPower * (0.85 + Math.random() * 0.3) >= theirPower); // HB_PVE = test aid
+  const foeLevel = foes.length ? Math.max(...foes.map((f) => f.level)) : 1;
+  if (!won) {
+    db.prepare('UPDATE players SET energy=MAX(0,energy-?) WHERE uid=? AND server_id=?').run(cost, pl.uid, pl.server_id);
+    if (row[38]) game.stageTried(db, pl, chap, stage);
+    const e0 = game.partEntry(db, pl, chap, part), cur0 = game.stagePart(chap, game.getStage(db, pl.uid, pl.server_id, chap)).part;
+    const a0 = `curchapter="${chap}" curstage="${cur0}" pos="${e0.pos}" pos_time="${e0.pos_time}" pk_boss_times="${e0.pk_boss_times}" curaction="${Math.max(0, pl.energy - cost)}" LastActionUpdatePastTime="0"`;
+    return `<root code="0"><pve ${a0}/><userinfo><LastSPUpdatePastTime>0</LastSPUpdatePastTime></userinfo>` +
+      game.battleXml(db, pl, chap, stage, { foes, win: false, enemyLevel: foeLevel, enemyName: 'Enemy' }) + game.awardFull({}) + '</root>';
+  }
   db.prepare('UPDATE players SET coin=coin+?, energy=MAX(0,energy-?) WHERE uid=? AND server_id=?').run(coin, cost, pl.uid, pl.server_id);
+  const lv = game.addExp(db, pl, exp); // after paying, so a level-up refill stays
   const now = game.stageCleared(db, pl, chap, stage);
-  if (now.clears >= (row[42] || 1)) game.setStage(db, pl.uid, pl.server_id, chap, stage + 1); // enough clears: next stage opens
-  if (stage >= game.chapterStages(chap) && now.clears >= (row[42] || 1) && chap < 19) game.setStage(db, pl.uid, pl.server_id, chap + 1, 1); // next chapter opens
+  if (now.clears >= game.clearsNeeded(row)) game.setStage(db, pl.uid, pl.server_id, chap, stage + 1); // enough clears: next stage opens
+  if (stage >= game.chapterStages(chap) && now.clears >= game.clearsNeeded(row) && chap < 19) game.setStage(db, pl.uid, pl.server_id, chap + 1, 1); // next chapter opens
   game.bumpTask(db, pl.uid, pl.server_id, 1); game.bumpTask(db, pl.uid, pl.server_id, 2);
-  const energy = Math.max(0, pl.energy - cost);
-  const cur = game.getStage(db, pl.uid, pl.server_id, chap);
-  const attrs = `curchapter="${chap}" curstage="${cur}" pos="1" pos_time="${now.clears}" pk_boss_times="${now.bossLeft}" curaction="${energy}" LastActionUpdatePastTime="0"`;
-  return `<root code="0"><pve ${attrs}/><userinfo><LastSPUpdatePastTime>0</LastSPUpdatePastTime></userinfo>` + game.battleXml(db, pl, chap, stage) +
-    game.awardFull({ coin, exp }) + '</root>';
+  const energy = db.prepare('SELECT energy FROM players WHERE uid=? AND server_id=?').get(pl.uid, pl.server_id).energy;
+  const curPart = game.stagePart(chap, game.getStage(db, pl.uid, pl.server_id, chap)).part; // next part opens when the boss falls
+  const e = game.partEntry(db, pl, chap, part); // the client writes these into the part that was just fought
+  // The client unlocks the chapter map from <pve curchapter>: after the last boss of a chapter, point it at the next chapter's first part
+  // (otherwise the next chapter stays grey until the next login; GitHub #5).
+  const nextOpen = chap < 19 && db.prepare('SELECT 1 FROM progress WHERE uid=? AND server_id=? AND chap=?').get(pl.uid, pl.server_id, chap + 1);
+  const attrs = `curchapter="${nextOpen ? chap + 1 : chap}" curstage="${nextOpen ? 1 : curPart}" pos="${e.pos}" pos_time="${e.pos_time}" pk_boss_times="${e.pk_boss_times}" curaction="${energy}" LastActionUpdatePastTime="0"`;
+  return `<root code="0"><pve ${attrs}/><userinfo><LastSPUpdatePastTime>0</LastSPUpdatePastTime></userinfo>` + game.battleXml(db, pl, chap, stage, { foes, win: true, enemyLevel: foeLevel, enemyName: 'Enemy' }) +
+    stageAward(db, pl, row, coin, exp) + '</root>';
+}
+
+// Every win drops something (the original drop rule lived on the dead server, so these are ours, as the owner asked for a
+// low-tier ninja or equipment): normal stage = Sage Stone III (not ramen: the victory card shows a Chinese name and no icon for ramen) / 1-2 star equipment / 1-2 star shinobi; boss stage = 3-star equipment or shinobi.
+// dropinfo ids: 250 Sage Stone III*1, 19 "One, Two-Star Equipment Card", 16 "One,Two-Star Shinobi Card", 21 "Three-Star Equipment Card", 17 "Three-Star Shinobi Card".
+function stageAward(db, pl, row, coin, exp) {
+  const r = Math.random();
+  const dropId = Number(process.env.HB_STAGE_DROP) || (row[38] ? (r < 0.5 ? 21 : 17) : r < 0.5 ? 250 : r < 0.8 ? 19 : 16); // HB_STAGE_DROP = test aid
+  const xml = game.grantDrop(db, pl, dropId);
+  if (!xml) return game.awardFull({});
+  const had = Number((xml.match(/<coin>(\d+)<\/coin>/) || [0, 0])[1]);
+  // <award type=N> is where the story-stage wheel stops (CDialogRunLevelTurnView::StartTurn, read from libgame.so): the client maps type 1,2,3,4,5 to wheel
+  // segment 4,3,1,0,2. Segments (counter-clockwise from the top): 0 "work harder", 1 EXP x2, 2 gold, 3 silver x2, 4 cards. A dropped card always lands on the cards
+  // segment; otherwise the wheel is luck (ours): 40% work harder, 20% EXP x2, 20% silver x2, 20% gold (3 gold). The client already credits the stage's own exp and
+  // silver, so a doubled segment adds ONE more copy through the award fields (the client adds <exp>/<coin>/<cash> from the award itself) and the server pays the same.
+  const hasCard = /<card>/.test(xml);
+  const luck = Number(process.env.HB_WHEEL) || (hasCard ? 1 : [4, 4, 4, 4, 3, 3, 2, 2, 5, 5][Math.floor(Math.random() * 10)]);
+  const pick = hasCard && !process.env.HB_WHEEL ? 1 : luck === 1 && !hasCard ? 4 : luck;
+  let out = xml.replace('<award ', `<award type="${pick}" `);
+  if (pick === 3) { game.addExp(db, db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(pl.uid, pl.server_id), exp); out = out.replace('<exp>0</exp>', `<exp>${exp}</exp>`); } // EXP x2
+  else if (pick === 2) { db.prepare('UPDATE players SET coin=coin+? WHERE uid=? AND server_id=?').run(coin, pl.uid, pl.server_id); out = out.replace(/ coin="\d+"/, ` coin="${coin}"`).replace(/<coin>\d+<\/coin>/, `<coin>${coin}</coin>`); } // silver x2
+  else if (pick === 5) { db.prepare('UPDATE players SET gold=gold+3 WHERE uid=? AND server_id=?').run(pl.uid, pl.server_id); out = out.replace(/<cash>\d+<\/cash>/, '<cash>3</cash>'); } // gold
+  return out;
 }
 
 const MT = { perday: 50, low: 1, top: 5, cost: 20, free: 5, start: 5000 };
@@ -208,24 +261,31 @@ module.exports = {
     game.ensureStarterTeam(db, acc.uid, pl.server_id, 1);
     // Offline server: energy is refilled to the level's maximum on every login.
     const lvRow = game.table('playerlevel').rows.find((r) => r[1] === pl.level);
-    if (lvRow && pl.energy < lvRow[4]) { db.prepare('UPDATE players SET energy=? WHERE uid=? AND server_id=?').run(lvRow[4], pl.uid, pl.server_id); pl.energy = lvRow[4]; }
+    const en = game.energyTick(db, pl); pl.energy = en.energy; // energy grows 1 per 180 s (no free refill on the main page any more)
     const gs = game.stateXml(db, acc.uid, pl.server_id);
     // Training chapters open one by one as the previous one is cleared (a new player is on chapter 1: the tutorial
     // breaks if the client is told about a later chapter).
     const cur = game.furthestChapter(db, acc.uid, pl.server_id);
-    const f = { uid: acc.uid, nick: pl.nick, cash: pl.gold, coin: pl.coin, curaction: pl.energy, cursp: 10,
+    const f = { uid: acc.uid, nick: pl.nick, cash: pl.gold, coin: pl.coin, curaction: pl.energy, cursp: game.spState(db, pl).sp,
       level: pl.level, country: pl.country, maxteammember: game.maxTeam(db, pl), activeTeamId: 0,
       attactlow: gs.totals.al, attacthigh: gs.totals.ah, defenselow: gs.totals.dl, defensehigh: gs.totals.dh, chakralow: gs.totals.cl, chakrahigh: gs.totals.ch,
-      caneat: 0, meritlevel: 0, meritscore: game.propCounts(db, acc.uid, pl.server_id)[9994] || 0, warpower: 0, LastActionUpdatePastTime: 0, LastSPUpdatePastTime: 0,
-      score: 0, viplevel: vip.level(db, acc.uid, pl.server_id), soul: 0, totalm: 0 };
+      caneat: 0, meritlevel: 0, meritscore: game.propCounts(db, acc.uid, pl.server_id)[9994] || 0, warpower: 0, LastActionUpdatePastTime: en.pass, LastSPUpdatePastTime: game.spState(db, pl).pass,
+      score: pl.exp || 0, viplevel: // <score> is the client's EXP field (CPlayerDataMgr +0xd4); 0 here reset the exp bar on every main page visit
+        vip.level(db, acc.uid, pl.server_id), soul: game.propCounts(db, acc.uid, pl.server_id)[9999] || 0, totalm: 0 };
     return '<root code="0"><user>' + Object.entries(f).map(([k, v]) => el(k, v)).join('') + '</user>' + gs.cards +
       gs.suitlist + '<defensesuitlist></defensesuitlist>' + game.chipbagXml(db, acc.uid, pl.server_id) +
       gs.ninjalist + '<defenseninjalist></defenseninjalist>' +
-      `<chapinfo currentchap="${cur.chap}" currentstage="${cur.stage}"/></root>`;
+      `<chapinfo currentchap="${cur.chap}" currentstage="${game.stagePart(cur.chap, cur.stage).part}"/></root>`;
   },
 
   // Gacha status (free pulls / pity counters). Everything available, nothing to track yet.
-  rl_r_recruit: () => '<root code="0"><recruit protect_comming="0" ninjaid="0" cost="0" bagid="0" attr="0"/></root>',
+  rl_r_recruit: ({ db, params: p }) => {
+    const acc = accountBySession(db, p);
+    const pl = acc && db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(acc.uid, Number(p.ServerID || 1));
+    const type = Number(p.Type || p.RecruitID || 1);
+    const left = pl ? game.recruitState(db, pl, type === 2 ? 2 : 1).toGo : 0; // pulls still needed for the sure 5-star
+    return `<root code="0"><recruit protect_comming="${left}" ninjaid="0" cost="0" bagid="0" attr="0"/></root>`;
+  },
 
   // Gacha pull. Cmd 1901 = ten-pull, otherwise a single pull. Type = recruitinfo row (1 premium, 2 standard, 3 free).
   rl_w_recruit: ({ db, params: p }) => {
@@ -252,6 +312,7 @@ module.exports = {
     const acc = accountBySession(db, p);
     if (!acc) return '<root code="3"><message>session expired</message></root>';
     const pl = db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(acc.uid, Number(p.ServerID || 1));
+    if (!game.spUse(db, pl)) return '<root code="5"><message>not enough grudge</message></root>';
     const r = game.sparFight(db, pl, Number(p.ToUid));
     game.addExp(db, pl, r.exp);
     db.prepare('UPDATE players SET coin=coin+? WHERE uid=? AND server_id=?').run(r.coin, pl.uid, pl.server_id);
@@ -261,7 +322,7 @@ module.exports = {
     const got = chip && seals.plunder(db, pl, chip, r.win);
     // The fragment is stored on the server; the seal list re-reads counts (rl_r_markchip) when it is shown again.
     const award = game.awardFull({ coin: r.coin, exp: r.exp });
-    return '<root code="0"><userinfo><LastSPUpdatePastTime>0</LastSPUpdatePastTime></userinfo>' + r.xml + award + (got ? '<message>Seal fragment plundered!</message>' : '') + '</root>';
+    return `<root code="0"><userinfo><LastSPUpdatePastTime>${game.spState(db, pl).pass}</LastSPUpdatePastTime></userinfo>` + r.xml + award + (got ? '<message>Seal fragment plundered!</message>' : '') + '</root>';
   },
 
   // Plunder / seal list (no seals yet) and country war status (no war running).
@@ -330,14 +391,14 @@ module.exports = {
   // Mailbox (Cmd 1802): welcome note + messages other players sent with the friend "Communicate" button (rl_w_friend Msg).
   rl_r_msg: ({ db, params: p }) => {
     if (Number(p.Cmd) !== 1802) return '<root code="0"><msglist></msglist></root>';
-    const now = Math.floor(Date.now() / 1000);
+    const S = require('./settings'); // the announcement from the Server Manager is the System note
     const acc = accountBySession(db, p);
     db.exec('CREATE TABLE IF NOT EXISTS mail (id INTEGER PRIMARY KEY AUTOINCREMENT, to_uid INTEGER, from_nick TEXT, text TEXT, ts INTEGER)');
     const mails = acc ? db.prepare('SELECT * FROM mail WHERE to_uid=? ORDER BY id DESC LIMIT 50').all(acc.uid) : [];
     const items = mails.map((m) => `<msg><iTime>${m.ts}</iTime><ID>${m.id + 1}</ID><iStatus>1</iStatus><text>${esc(m.from_nick + ': ' + m.text)}</text></msg>`).join('');
-    return `<root code="0"><msglist>${items}<msg><iTime>${now}</iTime><ID>1</ID><iStatus>1</iStatus><text>Welcome back to Hello Bro! Revival server.</text></msg></msglist></root>`;
+    return `<root code="0"><msglist>${items}<msg><iTime>${S.newsAt(db)}</iTime><ID>1</ID><iStatus>1</iStatus><text>${esc(S.news(db))}</text></msg></msglist></root>`;
   },
-  rl_r_bulletin: () => {
+  rl_r_bulletin: () => { // keep id 1 and this text: a new id makes the client crash (CSystemADMgr::SaveLocalNotice); announcements go to rl_r_msg
     const now = Math.floor(Date.now() / 1000);
     return `<root code="0"><servertime>${now}</servertime><bulletinlist><bulletin><id>1</id><type>1</type><cycle>60</cycle><begintime>${now - 86400}</begintime><endtime>${now + 86400 * 3650}</endtime><content>Welcome back to Hello Bro! Offline revival server - have fun with your friends.</content></bulletin></bulletinlist></root>`;
   },
@@ -358,7 +419,7 @@ module.exports = {
     }
     const r = game.actClaim(db, pl, Number(p.ActID), Number(p.SubID));
     if (!r) return '<root code="5"><message>not available</message></root>';
-    return '<root code="0">' + game.awardFull(r) + '</root>';
+    return '<root code="0">' + r.xml + '</root>';
   },
   // Small activities (month sign-in is Cmd 7/8; others not built yet -> empty OK reply).
   rl_x_small_activity: ({ db, params: p }) => {
@@ -409,13 +470,27 @@ module.exports = {
   rl_w_paypack: ({ db, params: p }) => {
     const acc = accountBySession(db, p);
     if (!acc) return '<root code="3"><message>session expired</message></root>';
-    return '<root code="0">' + game.awardFull({}) + '</root>';
+    // First-recharge gift (the Claim button on the top-up screen sends no HeapID): after the first top-up, once.
+    const pl = db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(acc.uid, Number(p.ServerID || 1));
+    if (pl && p.HeapID) {
+      const r = game.payHeapClaim(db, pl, Math.floor(vip.progress(db, pl.uid, pl.server_id).exp / 10), Number(p.HeapID));
+      return r.code ? `<root code="${r.code}"><message>${r.msg}</message></root>` : '<root code="0">' + r.xml + '</root>';
+    }
+    if (!pl) return '<root code="0">' + game.awardFull({}) + '</root>';
+    game.actEnsure(db);
+    if (db.prepare('SELECT 1 FROM actclaim WHERE uid=? AND server_id=? AND actid=9027').get(pl.uid, pl.server_id)) return '<root code="250010"><message>already claimed</message></root>';
+    if (vip.progress(db, pl.uid, pl.server_id).exp < 10) return '<root code="250011"><message>top up first</message></root>';
+    db.prepare('INSERT INTO actclaim(uid,server_id,actid,subid) VALUES(?,?,9027,1)').run(pl.uid, pl.server_id);
+    const fp = game.table('firstpurchase').rows[0] || []; // columns 2, 5, 8 = the three dropinfo ids shown on the screen
+    return '<root code="0">' + game.mergeAwards([fp[2], fp[5], fp[8]].map((id) => game.grantDrop(db, pl, id)).filter(Boolean)) + '</root>';
   },
   // Top-up screen header (VIP bar) + first-recharge gift state. Everyone is VIP on this server.
   rl_r_paypack: ({ db, params: p }) => {
     const acc = accountBySession(db, p);
     const vp = acc ? vip.progress(db, acc.uid, Number(p.ServerID || 1)) : { lv: 0, exp: 0, lvexp: 10 };
-    return `<root code="0"><payheaplist></payheaplist><maxlv>${vip.MAX_VIP}</maxlv><exp>${vp.exp}</exp><lvexp>${vp.lvexp}</lvexp>` +
+    const hp = acc && db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(acc.uid, Number(p.ServerID || 1));
+    const heap = hp ? game.payHeapXml(db, hp, Math.floor(vp.exp / 10)) : '<payheaplist></payheaplist>';
+    return `<root code="0">${heap}<maxlv>${vip.MAX_VIP}</maxlv><exp>${vp.exp}</exp><lvexp>${vp.lvexp}</lvexp>` +
       '<canget>1</canget><first_pay>1</first_pay><multiple>1</multiple><servertime>0</servertime><endtime>0</endtime></root>';
   },
   // Top-up packages. Buying is FREE here (the hot-updated ui_purchaseLayer.lua calls rl_x_free_topup instead of Google Play).
@@ -504,7 +579,7 @@ module.exports = {
     if (!pl) return '<root code="3"><message>session expired</message></root>';
     const r = game.propUse(db, pl, Number(p.Goodsid));
     if (r.error) return `<root code="5"><message>${r.error}</message></root>`;
-    return `<root code="0"><propuse ap="${r.ap}" sp="0" yinzi="${r.coin}" left="${r.left}" rest="0" max="0"/></root>`;
+    return `<root code="0"><propuse ap="${r.ap}" sp="0" yinzi="${r.coin}" left="${r.left}" rest="99" max="99"/></root>`;
   },
 
   rl_w_strengthen: ({ db, params: p }) => {
@@ -544,7 +619,21 @@ module.exports = {
       if (r.error) return `<root code="5"><message>${r.error}</message></root>`;
       return '<root code="0">' + r.xml + '</root>';
     }
-    if (cmd === 5) return '<root code="0"><total_val>0</total_val><card_list></card_list></root>';
+    // Refine shinobi into souls (ui_trainSoulLayer): BagId = 'seq|seq|..'. Soul per card = refinery_info (quality = ninjainfo last column:
+    // 6 star 2000, 5 star 1000, 4 star 150, 3 star 0). Cmd 5 = preview, Cmd 3 = refine (cards are removed, souls added).
+    if (cmd === 5 || cmd === 3) {
+      const seqs = String(p.BagId || '').split('|').map(Number).filter((n) => n > 0);
+      const per = Object.fromEntries(game.table('refinery_info').rows.map((r) => [r[3], r[4]]));
+      const cards = seqs.map((s) => db.prepare('SELECT * FROM cards WHERE uid=? AND server_id=? AND seq=? AND type=1').get(pl.uid, pl.server_id, s)).filter(Boolean);
+      const val = (c) => { const n = game.ninjas().get(c.ninja_id) || []; return per[n[n.length - 1]] || 0; };
+      const total = cards.reduce((t, c) => t + val(c), 0);
+      if (cmd === 5) return `<root code="0"><total_val>${total}</total_val><card_list>${cards.map((c) => `<card><bagid>${c.seq}</bagid><lianhun_val>${val(c)}</lianhun_val></card>`).join('')}</card_list></root>`;
+      if (!cards.length) return '<root code="5"><message>choose cards first</message></root>';
+      if (cards.some((c) => db.prepare('SELECT 1 FROM team WHERE uid=? AND server_id=? AND seq=?').get(pl.uid, pl.server_id, c.seq))) return '<root code="5"><message>take the card out of the team first</message></root>';
+      for (const c of cards) { db.prepare('DELETE FROM equipped WHERE uid=? AND server_id=? AND seq=?').run(pl.uid, pl.server_id, c.seq); db.prepare('DELETE FROM cards WHERE seq=?').run(c.seq); }
+      game.propAdd(db, pl.uid, pl.server_id, 9999, total);
+      return `<root code="0"><award dropid="1" coin="0"><cardlist></cardlist><proplist></proplist><chipbag></chipbag><coin>0</coin><cash>0</cash><exp>0</exp><chip>0</chip><action>0</action><merit>0</merit><pk_action>0</pk_action><soul>${total}</soul></award></root>`;
+    }
     return '<root code="0">' + game.secretXml(db, pl) + '</root>';
   },
 
@@ -568,6 +657,8 @@ module.exports = {
     const pl = acc && db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(acc.uid, Number(p.ServerID || 1));
     if (!pl) return '<root code="3"><message>session expired</message></root>';
     if (Number(p.Cmd) === 1) { const x = guild.adminXml(db, pl); return x ? `<root code="0">${x}</root>` : '<root code="5"><message>no group</message></root>'; }
+    if (Number(p.Cmd) === 8) { const grp = guild.myGroup(db, pl.uid, pl.server_id); return grp ? `<root code="0">${guild.constructXml(db, grp)}</root>` : '<root code="5"><message>no group</message></root>'; }
+    if (Number(p.Cmd) === 9) { const r = guild.constructUp(db, pl, Number(p.ConstructID)); return r.error ? `<root code="5"><message>${r.error}</message></root>` : `<root code="0">${r.xml}</root>`; }
     return '<root code="0"></root>';
   },
 
@@ -621,7 +712,13 @@ module.exports = {
     const pl = acc && db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(acc.uid, Number(p.ServerID || 1));
     if (!pl) return '<root code="3"><message>session expired</message></root>';
     const cmd = Number(p.Cmd);
-    if (cmd === 16) return '<root code="0"><basic><status>2</status><amount>4900</amount><current>4900</current></basic><awards><item icon1="props_015" icon2="props_049" icon3="props_073"><id>1</id><num>1</num></item></awards></root>';
+    if (cmd === 16) { // "49$ gift" on the top-up screen: status 0 not reached, 1 received, 2 can claim; amounts in cents. Gift = props_015 / props_049 / props_073 icons = drops 11, 15, 374
+      game.actEnsure(db);
+      const dollars = Math.floor(vip.progress(db, pl.uid, pl.server_id).exp / 10);
+      const got = db.prepare('SELECT 1 FROM actclaim WHERE uid=? AND server_id=? AND actid=9026').get(pl.uid, pl.server_id);
+      const status = got ? 1 : dollars >= 49 ? 2 : 0;
+      return `<root code="0"><basic><status>${status}</status><amount>4900</amount><current>${Math.min(dollars, 49) * 100}</current></basic><awards><item icon1="props_015" icon2="props_049" icon3="props_073" drop1="11" drop2="15" drop3="374"><id>1</id><num>1</num></item></awards></root>`;
+    }
     if (cmd === 3) return '<root code="0">' + mora.infoXml(db, pl) + '</root>';
     if (cmd === 20) return '<root code="0"><basic><prop_num>99</prop_num></basic></root>';
     if (cmd === 8) return '<root code="0"><basic><cost_prop>1</cost_prop><prop_num>99</prop_num></basic></root>';
@@ -643,12 +740,11 @@ module.exports = {
     if (wc === 4) { const r = mora.play(db, pl, Number(p.GambleNPCID), Number(p.GambleMustWin) === 1); return r.error ? `<root code="5"><message>${r.error}</message></root>` : '<root code="0">' + r.xml + '</root>'; }
     if (wc === 7) { const r = mora.buyLife(db, pl, Number(p.GambleCashType)); return r.error ? `<root code="5"><message>${r.error}</message></root>` : '<root code="0"></root>'; }
     if (wc === 5 || wc === 6) { const r = mora.exchange(db, pl, Number(p.GambleExchangeID)); return r.error ? `<root code="5"><message>${r.error}</message></root>` : '<root code="0">' + r.xml + '</root>'; }
-    if (Number(p.Cmd) === 26) { // 49$ gift: free here
-      const done = db.prepare("SELECT 1 FROM actclaim WHERE uid=? AND server_id=? AND actid=9026").get(pl.uid, pl.server_id);
-      if (done) return '<root code="610002"><message>received</message></root>';
+    if (Number(p.Cmd) === 26) { game.actEnsure(db); // 49$ gift: a 5-star shinobi card, a 4-star ninjutsu card and Madara, once, after $49 of top-ups in total
+      if (db.prepare('SELECT 1 FROM actclaim WHERE uid=? AND server_id=? AND actid=9026').get(pl.uid, pl.server_id)) return '<root code="610002"><message>received</message></root>';
+      if (Math.floor(vip.progress(db, pl.uid, pl.server_id).exp / 10) < 49) return '<root code="610001"><message>top-up amount is insufficient</message></root>';
       db.prepare('INSERT INTO actclaim(uid,server_id,actid,subid) VALUES(?,?,9026,1)').run(pl.uid, pl.server_id);
-      db.prepare('UPDATE players SET gold=gold+4900 WHERE uid=? AND server_id=?').run(pl.uid, pl.server_id);
-      return '<root code="0">' + game.awardFull({ cash: 4900 }) + '</root>';
+      return '<root code="0">' + game.mergeAwards([11, 15, 374].map((id) => game.grantDrop(db, pl, id)).filter(Boolean)) + '</root>';
     }
     if (Number(p.Cmd) === 28) {
       const r = game.godSynth(db, pl, Number(p.AttackCardBagIndex), Number(p.DefenseCardBagIndex));
@@ -701,7 +797,8 @@ module.exports = {
   rl_w_ramen: ({ db, params: p }) => {
     const acc = accountBySession(db, p);
     if (!acc) return '<root code="3"><message>session expired</message></root>';
-    db.prepare('UPDATE players SET energy=MAX(energy,106) WHERE uid=? AND server_id=?').run(acc.uid, Number(p.ServerID || 1));
+    const rp = db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(acc.uid, Number(p.ServerID || 1));
+    if (rp) { const max = (game.table('playerlevel').rows.find((r) => r[1] === rp.level) || [])[4] || 50; db.prepare('UPDATE players SET energy=MAX(energy,?) WHERE uid=? AND server_id=?').run(max, rp.uid, rp.server_id); }
     return '<root code="0"></root>';
   },
 
@@ -848,16 +945,14 @@ module.exports = {
   // Growth / star strengthening (rl_w_star): Cmd 3 = rate table, others = do one upgrade attempt.
   rl_w_star: ({ db, params: p }) => {
     if (Number(p.Cmd) === 3) {
-      let items = '';
-      for (let i = 0; i < 20; i++) items += `<item star_now="${i}" max_percent="${Math.max(30, 100 - i * 4)}" stone_level="1" stone_added_percent="10"/>`;
-      return '<root code="0"><star_list>' + items + '</star_list></root>';
+      return '<root code="0"><star_list>' + game.growStarList() + '</star_list></root>';
     }
     const acc = accountBySession(db, p);
     const pl = acc && db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(acc.uid, Number(p.ServerID || 1));
     if (!pl) return '<root code="3"><message>session expired</message></root>';
-    const r = game.sageGrow(db, pl, Number(p.ReadyCard), Number(p.StarStoneID), Number(p.StarStoneNum));
+    const r = game.sageGrow(db, pl, Number(p.ReadyCard), Number(p.StarStoneID), Number(p.StarStoneNum), Number(p.StarStoneExtID), Number(p.StarStoneExtNum));
     if (r.error) return `<root code="5"><message>${r.error}</message></root>`;
-    return `<root code="0" levelSuccess="${r.win ? 1 : 0}" levelDrop="${r.drop}" currentLevel="${r.lv}" propLeft="${r.left}" extPropLeft="0"></root>`;
+    return `<root code="0" levelSuccess="${r.win ? 1 : 0}" levelDrop="${r.drop}" currentLevel="${r.lv}" propLeft="${r.left}" extPropLeft="${r.extLeft}"></root>`;
   },
 
   rl_r_friend: ({ db, params: p }) => {
@@ -951,7 +1046,7 @@ module.exports = {
     db.prepare('UPDATE players SET coin=coin+? WHERE uid=? AND server_id=?').run(coin, pl.uid, sid);
     game.setStage(db, pl.uid, sid, 1000 + chap, round + 1);
     game.bumpTask(db, pl.uid, sid, 1);
-    return '<root code="0"><userinfo><LastSPUpdatePastTime>0</LastSPUpdatePastTime></userinfo>' + game.battleXml(db, pl, chap, round * 5, { enemyLevel: 10 * chap }) + game.awardFull({ coin, exp }) + '</root>';
+    return '<root code="0"><userinfo><LastSPUpdatePastTime>0</LastSPUpdatePastTime></userinfo>' + game.battleXml(db, pl, chap, round * 5, { enemyLevel: 10 * chap }) + stageAward(db, pl, [], 0, 0) + '</root>'; // dropid must be non-zero or the result screen crashes (GitHub #3); the client credits exp/silver itself
   },
 
   // Daily tasks: Cmd 1 = list, Cmd 2 = claim an award (AwardID).
@@ -962,8 +1057,8 @@ module.exports = {
     if (Number(p.Cmd) === 2) {
       const pl = db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(acc.uid, sid);
       const a = game.dailyClaim(db, pl, Number(p.AwardID));
-      if (!a) return '<root code="5"><message>bad award</message></root>';
-      return '<root code="0">' + game.awardFull({ coin: a.coin, cash: a.cash }) + '</root>';
+      if (!a || a.error) return `<root code="5"><message>${a ? a.error : 'bad award'}</message></root>`;
+      return '<root code="0">' + a.xml + '</root>';
     }
     return '<root code="0">' + game.dailyXml(db, acc.uid, sid) + '</root>';
   },
@@ -974,12 +1069,14 @@ module.exports = {
     if (!acc) return '<root code="3"><message>session expired</message></root>';
     const sid = Number(p.ServerID || 1);
     const pl0 = db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(acc.uid, sid);
-    if (Number(p.Cmd) === 3) return trainingFight(db, pl0, Number(p.ChapID || 1), Number(p.StageID || 1));
-    const cur = game.getStage(db, acc.uid, sid, Number(p.ChapID || 1));
+    const chap = Number(p.ChapID || 1);
+    if (Number(p.Cmd) === 3) return trainingFight(db, pl0, chap, Number(p.StageID || 1), Number(p.Pos || 1), Number(p.WastCashBoss) === 1);
+    // stagelist = one entry per PART reached: pos = open row inside it, pos_time = clears of that row, pk_boss_times = boss tries left
+    const cur = game.stagePart(chap, game.getStage(db, acc.uid, sid, chap)).part;
     let stages = '';
     for (let i = 1; i <= cur; i++) {
-      const st = game.stageState(db, pl0, Number(p.ChapID || 1), i);
-      stages += `<stage stageid="${i}" pos="1" pos_time="${st.clears}" pk_boss_times="${st.bossLeft}"/>`;
+      const e = game.partEntry(db, pl0, chap, i);
+      stages += `<stage stageid="${i}" pos="${e.pos}" pos_time="${e.pos_time}" pk_boss_times="${e.pk_boss_times}"/>`;
     }
     return `<root code="0"><preview currentstage="${cur}" laststage="${cur}"/><stagelist>${stages}</stagelist><expbuf addrate="0" exp_time="0"/></root>`;
   },
@@ -987,11 +1084,13 @@ module.exports = {
   // Shop. Cmd 1600 = gift packs, 1601 = goods. An EMPTY list crashes the client, so always send >= 1 entry.
   rl_r_shoplist: ({ db, params: p }) => {
     const shopOwned = (q) => { const a = accountBySession(db, q); return a ? game.propCounts(db, a.uid, Number(q.ServerID || 1)) : {}; };
-    const recruits = [
-      { recruit_id: 1, recruit_yuanbao: 300, recruit_time: 0, last_recruit_time: 0, first_yuanbao: 0, free_recruit_time_left: 0, recruit_limit: 0, cur_recruit_count: 0 },
-      { recruit_id: 2, recruit_yuanbao: 150, recruit_time: 0, last_recruit_time: 0, first_yuanbao: 0, free_recruit_time_left: 0, recruit_limit: 0, cur_recruit_count: 0 },
-      { recruit_id: 3, recruit_yuanbao: 0, recruit_time: 86400, last_recruit_time: 0, first_yuanbao: 0, free_recruit_time_left: 0, recruit_limit: 0, cur_recruit_count: 0 },
-    ];
+    const rAcc = accountBySession(db, p), rPl = rAcc && db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(rAcc.uid, Number(p.ServerID || 1));
+    const rec = (id, cost) => {
+      const s = rPl ? game.recruitState(db, rPl, id) : { every: 0, last: 0, left: 0 };
+      return { recruit_id: id, recruit_yuanbao: cost, recruit_time: s.every, last_recruit_time: s.last, first_yuanbao: 0, free_recruit_time_left: s.left, recruit_limit: 0, cur_recruit_count: 0 };
+    };
+    const recruits = [rec(1, 300), rec(2, 150),
+      { recruit_id: 3, recruit_yuanbao: 0, recruit_time: 0, last_recruit_time: 0, first_yuanbao: 0, free_recruit_time_left: 0, recruit_limit: game.ORDER_DAILY, cur_recruit_count: rPl ? game.orderUsedToday(db, rPl) : 0 }];
     const rows = (tag, list) => list.map((o) => `<${tag}>` + Object.entries(o).map(([k, v]) => el(k, v)).join('') + `</${tag}>`).join('');
     const esc = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const n = (v) => Math.round(Number(v) || 0);

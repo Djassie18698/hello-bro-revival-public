@@ -11,18 +11,26 @@ const dayNow = () => Math.min(28, new Date().getUTCDate());
 
 function ensure(db) {
   db.exec('CREATE TABLE IF NOT EXISTS monthsign (uid INTEGER, server_id INTEGER, ym TEXT, day INTEGER, PRIMARY KEY(uid,server_id,ym,day))');
+  try { db.exec('ALTER TABLE monthsign ADD COLUMN date TEXT'); } catch (e) { /* already there */ }
+}
+// One slot opens per calendar day, in order: the next unsigned slot is open only if nothing was signed today (owner: every slot showed as claimable).
+const todayStr = () => new Date().toISOString().slice(0, 10);
+function nextOpen(db, pl) {
+  const done = signed(db, pl);
+  if (db.prepare('SELECT 1 FROM monthsign WHERE uid=? AND server_id=? AND ym=? AND date=?').get(pl.uid, pl.server_id, ym(), todayStr())) return 0;
+  return done.size + 1 <= 28 ? done.size + 1 : 0;
 }
 const signed = (db, pl) => new Set(db.prepare('SELECT day FROM monthsign WHERE uid=? AND server_id=? AND ym=?').all(pl.uid, pl.server_id, ym()).map((r) => r.day));
 
 function listXml(db, pl) {
   ensure(db);
-  const done = signed(db, pl), today = dayNow();
+  const done = signed(db, pl), open = nextOpen(db, pl);
   const props = game.table('consumeinfo').rows;
   let items = '';
   for (let d = 1; d <= 28; d++) {
     const [pid, n] = reward(d);
     const icon = (props.find((r) => r[1] === pid) || [])[3] || 'props_020';
-    const status = done.has(d) ? 1 : d <= today ? 0 : 3;
+    const status = done.has(d) ? 1 : d === open ? 0 : 3;
     items += `<signitem>${el('sign_id', d)}${el('need_vip', 0)}${el('award_id', pid)}${el('award_icon', icon)}${el('award_num', n)}${el('status', status)}</signitem>`;
   }
   return `<user>${el('days', done.size)}</user><month mth="${Number(ym().slice(5))}">${items}</month>`;
@@ -30,9 +38,9 @@ function listXml(db, pl) {
 
 function sign(db, pl, signId) {
   ensure(db);
-  if (!(signId >= 1 && signId <= dayNow())) return { error: 'not available yet' };
   if (signed(db, pl).has(signId)) return { error: 'already signed' };
-  db.prepare('INSERT INTO monthsign(uid,server_id,ym,day) VALUES(?,?,?,?)').run(pl.uid, pl.server_id, ym(), signId);
+  if (signId !== nextOpen(db, pl)) return { error: 'not available yet' };
+  db.prepare('INSERT INTO monthsign(uid,server_id,ym,day,date) VALUES(?,?,?,?,?)').run(pl.uid, pl.server_id, ym(), signId, todayStr());
   const [pid, n] = reward(signId);
   game.propAdd(db, pl.uid, pl.server_id, pid, n);
   const out = drops.newOut(); out.props[pid] = n;
