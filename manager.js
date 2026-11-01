@@ -43,7 +43,7 @@ function status(db, port) {
     players: one('SELECT COUNT(*) n FROM players'), accounts: one('SELECT COUNT(*) n FROM accounts'), groups: one('SELECT COUNT(*) n FROM groups'),
     online, addresses: addresses(port), dbSize: size, backups: backups().slice(0, 8),
     events: settings.EVENTS.map((e) => ({ ...e, on: settings.eventOn(db, e.id) })),
-    news: settings.news(db),
+    news: settings.news(db), banner: settings.banner(db),
   };
 }
 
@@ -78,6 +78,12 @@ module.exports = async function manager(req, res, u, db, readBody) {
     const text = String(b.text || '').replace(/\s+/g, ' ').trim().slice(0, 300) || settings.DEFAULT_NEWS;
     settings.setNews(db, text);
     console.log('[manager] announcement changed');
+    return json(res, { ok: true, text });
+  }
+  if (u.pathname === '/manager/api/banner') {
+    const text = String(b.text || '').replace(/\s+/g, ' ').trim().slice(0, 300) || settings.DEFAULT_BANNER;
+    settings.set(db, 'banner', text);
+    console.log('[manager] top banner changed');
     return json(res, { ok: true, text });
   }
   if (u.pathname === '/manager/api/backup') {

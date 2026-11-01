@@ -17,3 +17,4 @@ Shipped so far: 28.0.3 = ui_purchaseLayer.lua (top-up buttons call rl_x_free_top
 28.0.9 = ui_purchaseLayer.lua also sets the VIP level from <viplevel> in the rl_x_free_topup reply.
 Note: mainActivity.lua is run by C++ straight from the OBB, so patching it does nothing; files loaded with `require` do pick up patches.
 28.0.10 = adds ui_layer/ui_sevenDayCell.lua with English texts for the 7-day goals (the game's own table is Thai).
+28.0.11-13 = ui_layer/ui_gameSettingLayer.lua: the hidden "switch account" row in Settings is now a "Join Discord" button (openHyperlink to https://discord.gg/2Cbp4UDHrU). Lua button titles: setTitleForState with a Lua string does nothing and with CCString errors here; set getTitleLabel() (CCLabelTTF) instead.

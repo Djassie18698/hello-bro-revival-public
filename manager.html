@@ -162,6 +162,15 @@ textarea:focus{border-color:var(--orange)}
         <div class="who" id="who"></div>
       </section>
       <section class="panel">
+        <h3>📜 Top banner</h3>
+        <p class="hint">The text that scrolls along the top of the home screen. Use <b>|</b> to put a gap between two messages.</p>
+        <textarea id="banner" maxlength="300" style="min-height:64px"></textarea>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px">
+          <small class="sub">Players see it the next time they open the home screen.</small>
+          <button class="btn sm" onclick="saveBanner()">Save banner</button>
+        </div>
+      </section>
+      <section class="panel">
         <h3>📣 Announcement</h3>
         <p class="hint">Shown to players in the game under <b>News → System</b>.</p>
         <textarea id="news" maxlength="300"></textarea>
@@ -251,6 +260,7 @@ async function refresh() {
       '</small></div><label class="sw"><input type="checkbox"' + (e.on ? ' checked' : '') + ' onchange="toggleEvent(' + e.id + ',this.checked)"><span></span></label></div>').join('');
   }
   if (document.activeElement !== $('news') && !$('news').dataset.dirty) { $('news').value = s.news; countNews(); }
+  if (document.activeElement !== $('banner') && !$('banner').dataset.dirty) $('banner').value = s.banner;
   $('backups').innerHTML = s.backups.length ? s.backups.map((b) => '<div class="bk"><b>' + esc(b.name) + '</b><span>' + size(b.size) + ' · ' + ago(b.at) + '</span></div>').join('') : '<div class="empty">No backups yet</div>';
 }
 async function toggleEvent(id, on) {
@@ -264,6 +274,12 @@ async function saveNews() {
   const r = await api('news', { text: $('news').value });
   delete $('news').dataset.dirty;
   toast(r.ok ? 'Announcement saved' : r.error, r.ok); refresh();
+}
+$('banner').addEventListener('input', () => { $('banner').dataset.dirty = 1; });
+async function saveBanner() {
+  const r = await api('banner', { text: $('banner').value });
+  delete $('banner').dataset.dirty;
+  toast(r.ok ? 'Banner saved' : r.error, r.ok); refresh();
 }
 async function backup() { const r = await api('backup', {}); toast(r.ok ? 'Backup saved<br><small>' + esc(r.name) + '</small>' : r.error, r.ok); refresh(); }
 function copy(t) { navigator.clipboard && navigator.clipboard.writeText(t); toast('Copied ' + esc(t)); }

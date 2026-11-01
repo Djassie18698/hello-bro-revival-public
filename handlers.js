@@ -275,7 +275,9 @@ module.exports = {
     return '<root code="0"><user>' + Object.entries(f).map(([k, v]) => el(k, v)).join('') + '</user>' + gs.cards +
       gs.suitlist + '<defensesuitlist></defensesuitlist>' + game.chipbagXml(db, acc.uid, pl.server_id) +
       gs.ninjalist + '<defenseninjalist></defenseninjalist>' +
-      `<chapinfo currentchap="${cur.chap}" currentstage="${game.stagePart(cur.chap, cur.stage).part}"/></root>`;
+      `<chapinfo currentchap="${cur.chap}" currentstage="${game.stagePart(cur.chap, cur.stage).part}"/>` +
+      // the scrolling banner at the top of the home screen (CDefaultMainMenu -> CMainMenu::InitAnnounceMsg; '|' separates messages); text from the Server Manager
+      `<horn><horninfo>${esc(require('./settings').banner(db))}</horninfo><hornflag>1</hornflag></horn></root>`;
   },
 
   // Gacha status (free pulls / pity counters). Everything available, nothing to track yet.

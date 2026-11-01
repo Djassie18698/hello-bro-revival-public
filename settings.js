@@ -15,7 +15,9 @@ const EVENTS = [
   { id: 17, pos: 9, type: 1, icon: '🎲', name: 'Millionaire', desc: 'Board game with dice (home screen button).' },
   { id: 31, pos: 10, type: 1, icon: '🏁', name: 'Stage gift', desc: 'One-time gift for new players (home screen button).' },
 ];
-const DEFAULT_NEWS = 'Welcome back to Hello Bro! Revival server.';
+const DISCORD = 'https://discord.gg/2Cbp4UDHrU';
+const DEFAULT_BANNER = 'Join our Discord for help, bugs and friends: discord.gg/2Cbp4UDHrU  (Settings > Join Discord)';
+const DEFAULT_NEWS = 'Welcome back to Hello Bro! Revival server. Join our Discord: discord.gg/2Cbp4UDHrU';
 
 const ensure = (db) => db.exec('CREATE TABLE IF NOT EXISTS server_settings (key TEXT PRIMARY KEY, value TEXT)');
 function get(db, key, dflt) {
@@ -38,6 +40,7 @@ function setEvent(db, id, on) {
 const news = (db) => get(db, 'news', DEFAULT_NEWS);
 // Shown as the System note in the game's News screen (rl_r_msg Cmd 1802), dated when it was last changed. NOT the rl_r_bulletin popup:
 // the client stores shown bulletin ids in ADMsg.xml and crashes (SaveLocalNotice, 'no node:bulletin') when a new id arrives.
+const banner = (db) => get(db, 'banner', DEFAULT_BANNER);
 const newsAt = (db) => get(db, 'news_at', Math.floor(started / 1000));
 function setNews(db, text) { set(db, 'news', text); set(db, 'news_at', Math.floor(Date.now() / 1000)); }
 
@@ -56,4 +59,4 @@ function addLog(kind, text) {
 }
 const online = (ms = 5 * 60000) => [...seen.entries()].filter(([, v]) => Date.now() - v.at < ms).map(([uid, v]) => ({ uid, ...v }));
 
-module.exports = { EVENTS, DEFAULT_NEWS, get, set, eventOn, eventsOff, setEvent, news, newsAt, setNews, started, hit, addLog, log, online, stats: () => ({ requests }) };
+module.exports = { EVENTS, DISCORD, DEFAULT_BANNER, banner, DEFAULT_NEWS, get, set, eventOn, eventsOff, setEvent, news, newsAt, setNews, started, hit, addLog, log, online, stats: () => ({ requests }) };
