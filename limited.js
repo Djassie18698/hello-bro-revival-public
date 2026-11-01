@@ -1,8 +1,8 @@
-// Three more limited-time events (all switched in the Server Manager; prices, rewards and limits are (ours): nothing of them was on the photos):
+// Three more limited-time events (all switched in the Server Manager; prices, rewards and limits are (ours) except the discount, which is from photo 2755):
 //  - Diligence gift (Event menu id 33, ui_diligenceGiftLayer): rl_r_multiple_task Cmd 1 list, Cmd 2 AwardID claim. Every N times you do
 //    something today (the daily-task counters) you may claim a reward, a few times a day.
-//  - Limited discount (id 27, ui_limitDiscountLayer): rl_r_activity Cmd 9004, rl_w_activity Cmd 9100 ActType 10. Top up at least `mincash`
-//    gold while it runs and claim a gift worth `maxval` gold. Top-ups are free on this server; they are logged in topup_log.
+//  - Limited discount / Time limited GiftPack (id 27, ui_limitDiscountLayer): rl_r_activity Cmd 9004, rl_w_activity Cmd 9100 ActType 10. Top up
+//    at least $`mincash` while it runs and claim a gift worth $`maxval` (original numbers, see DISCOUNT). Top-ups are free on this server; they are logged in topup_log.
 //  - Lottery (id 22, ui_lotteryTicketLayer): rl_r_lottery Cmd 1 info / 2 my numbers / 3 winners, rl_w_lottery Cmd 1 No = buy, Cmd 2 = claim.
 //    A 4-digit number is drawn every day at 20:30 (game text). Prize by digits in the same place as the winning number (game text, example
 //    1890: 1790 = 1st, 1692 = 2nd, 1789 = 3rd): 3+ = 1st, 2 = 2nd, 1 = 3rd; only the best prize counts. Tickets: 3 a day, +1 per 6 VIP levels.
@@ -23,6 +23,7 @@ function ensure(db) {
     CREATE TABLE IF NOT EXISTS discount_claim (uid INTEGER, server_id INTEGER, run INTEGER, PRIMARY KEY(uid, server_id, run));
     CREATE TABLE IF NOT EXISTS lottery_draw (phase INTEGER PRIMARY KEY, no INTEGER);
     CREATE TABLE IF NOT EXISTS lottery_ticket (uid INTEGER, server_id INTEGER, phase INTEGER, no INTEGER, claimed INTEGER DEFAULT 0)`);
+  try { db.exec('ALTER TABLE topup_log ADD COLUMN cents INTEGER NOT NULL DEFAULT 0'); } catch { /* already there (price of the top-up in cents) */ }
 }
 
 // ---- Diligence gift ------------------------------------------------------------------------------------------------
@@ -61,28 +62,34 @@ function diligenceClaim(db, pl, id) {
 }
 
 // ---- Limited discount ----------------------------------------------------------------------------------------------
-const DISCOUNT = { mincash: 980, maxval: 3000, drops: [1646, 1820, 1791, 936] }; // Hinata (God), 200 Souls Dan, 300 Reincarnation Pills, 100 Super Ninja Pills
-function logTopup(db, uid, sid, gold) { ensure(db); db.prepare('INSERT INTO topup_log VALUES(?,?,?,?)').run(uid, sid, now(), gold); }
+// ORIGINAL (Facebook photo 2755, "Time limited GiftPack" on the Preferential tab): "lowest 19 recharge, claim 60 price giftpack",
+// event 70 h, rewards 5s Shinobi (God) + 5 keys + 4S Ninjutsu + 3 EXP. The amounts are dollars (top-ups are free here). (ours): which key
+// (Gold) and EXP card (golden Choji, the giftpack shop's EXP card), the pack icons.
+const DISCOUNT = { mincash: 19, maxval: 60, hours: 70, items: [ // [shown drop, icon, name, dropinfo ids paid]
+  [1800, 'props_015', '5s Shinobi(God)', [1800]], [1433, 'props_129', '5', [1433]],
+  [15, 'props_028', '4S Ninjutsu', [15]], [1502, 'props_209', '3', [1502, 1502, 1502]]] };
+function logTopup(db, uid, sid, gold, cents = 0) { ensure(db); db.prepare('INSERT INTO topup_log(uid, server_id, at, gold, cents) VALUES(?,?,?,?,?)').run(uid, sid, now(), gold, cents); }
 const discountRun = (db) => settings.switchedOnAt(db, 'discount') || 0;
+const discountLeft = (db) => Math.max(0, (settings.switchedOnAt(db, 'discount') || now()) + DISCOUNT.hours * 3600 - now());
 function discountState(db, pl) {
   if (db.prepare('SELECT 1 FROM discount_claim WHERE uid=? AND server_id=? AND run=?').get(pl.uid, pl.server_id, discountRun(db))) return 2;
-  const paid = db.prepare('SELECT COALESCE(SUM(gold),0) n FROM topup_log WHERE uid=? AND server_id=? AND at>=?').get(pl.uid, pl.server_id, discountRun(db)).n;
-  return paid >= DISCOUNT.mincash ? 1 : 0;
+  const cents = db.prepare('SELECT COALESCE(SUM(cents),0) n FROM topup_log WHERE uid=? AND server_id=? AND at>=?').get(pl.uid, pl.server_id, discountRun(db)).n;
+  return cents >= DISCOUNT.mincash * 100 ? 1 : 0;
 }
 function discountXml(db, pl) {
   if (!settings.eventOn(db, 'discount')) return null;
   ensure(db);
-  const items = DISCOUNT.drops.map((d) => `<item drop="${d}" icon="" name="${dropName(d)}"/>`).join('');
-  return `<preview mincash="${DISCOUNT.mincash}" resttime="${runLeft(db, 'discount', 7)}" maxval="${DISCOUNT.maxval}"/><award state="${discountState(db, pl)}">${items}</award>`;
+  const items = DISCOUNT.items.map(([d, icon, name]) => `<item drop="${d}" icon="${icon}" name="${name}"/>`).join('');
+  return `<preview mincash="${DISCOUNT.mincash}" resttime="${discountLeft(db)}" maxval="${DISCOUNT.maxval}"/><award state="${discountState(db, pl)}">${items}</award>`;
 }
 function discountClaim(db, pl) {
-  if (!settings.eventOn(db, 'discount')) return err('the event is over');
+  if (!settings.eventOn(db, 'discount') || !discountLeft(db)) return err('the event is over');
   ensure(db);
   const s = discountState(db, pl);
   if (s === 2) return err('already claimed');
-  if (s === 0) return err(`top up ${DISCOUNT.mincash} gold first`);
+  if (s === 0) return err(`top up $${DISCOUNT.mincash} first`);
   db.prepare('INSERT INTO discount_claim VALUES(?,?,?)').run(pl.uid, pl.server_id, discountRun(db));
-  return { xml: game.mergeAwards(DISCOUNT.drops.map((d) => game.grantDrop(db, pl, d)).filter(Boolean)) };
+  return { xml: game.mergeAwards(DISCOUNT.items.flatMap((it) => it[3]).map((d) => game.grantDrop(db, pl, d)).filter(Boolean)) };
 }
 
 // ---- Lottery -------------------------------------------------------------------------------------------------------

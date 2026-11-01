@@ -24,9 +24,12 @@ const EVENTS = [
   { id: 'hottreasure', screen: 43, pos: 13, type: 2, limited: true, icon: '💰', name: 'Hot Treasure', desc: 'Treasure hunt: 1 free hunt a day, then 100 gold (10 hunts 900). Ten hunts always give the top prize.' },
   { id: 'consumption', screen: 37, pos: 14, type: 2, limited: true, icon: '🪙', name: 'Gold spending rewards', desc: 'Spend gold while it runs: 3000 / 8000 / 13000 / 30000 gold unlock god cards, ninjutsu and dans (original rewards).' },
   { id: 'diligence', screen: 33, pos: 15, type: 2, limited: true, icon: '💪', name: 'Diligence gift', desc: 'Every 20 training fights, 5 spar wins, 5 growths... today gives a reward, a few times a day.' },
-  { id: 'discount', screen: 27, pos: 16, type: 2, limited: true, icon: '🏷️', name: 'Limited discount', desc: 'Top up 980 gold (free here) while it runs and claim a gift worth 3000 gold, once.' },
+  { id: 'discount', screen: 27, pos: 16, type: 2, limited: true, icon: '🏷️', name: 'Time limited GiftPack', desc: 'Top up $19 (free here) within 70 h and claim a $60 giftpack once: a 5-star God shinobi, 5 Gold Keys, a 4-star ninjutsu and 3 EXP cards (original, photo 2755).' },
   { id: 'lottery', screen: 22, pos: 17, type: 2, limited: true, icon: '🎟️', name: 'Lottery', desc: 'Pick 4-digit numbers for 50 gold (3 a day). Drawn daily at 20:30; matching digits win prizes.' },
   { id: 'groupbuy', screen: 13, pos: 21, type: 2, limited: true, icon: '🛒', name: 'Limited group purchase', desc: 'Discount packs with stock shared by the whole server (original prices: 100 Super Ninja Pills 1500 gold, 80 Reincarnation Pills 2000...). Runs 72 h.' },
+  { id: 'totalgift', screen: 11, pos: 22, type: 2, limited: true, icon: '💵', name: 'Great gift for total recharge', desc: 'Top up $240 / $420 / $750 in 48 h (free here) for the original gifts: Minato + Shakujo, a 2nd-rebirth Hokage Kakashi (God), a 7th-rebirth Kaguya (God) and pills.' },
+  { id: 'dailycost', screen: 25, pos: 23, type: 2, limited: true, icon: '🪙', name: 'Daily spending gift', desc: 'Spend 100 / 500 / 1000 / 2000 gold in a day for pills, Souls Dan and keys; resets every day. Runs 7 days. Rewards are ours (no photo).' },
+  { id: 'keeppay', screen: 26, pos: 25, type: 2, limited: true, icon: '📆', name: 'Recharge streak', desc: 'Top up (free here) on 7 different days for 7 daily gifts and a bonus (300 Reincarnation Pills + 200 Souls Dan). Rewards are ours.' },
   { id: 'bench', noconf: true, limited: true, icon: '📏', name: 'Benchmark rivals in Spar', desc: 'Six computer rivals at the top of Spar with 100K, 500K, 1M, 2M, 4M and 8M defence. Free, no rewards: to test a team.' },
 ];
 const DISCORD = 'https://discord.gg/2Cbp4UDHrU';

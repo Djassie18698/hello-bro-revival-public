@@ -436,6 +436,26 @@ module.exports = {
     const x = limited.diligenceXml(db, pl);
     return x ? '<root code="0">' + x + '</root>' : '<root code="5"><message>the event is over</message></root>';
   },
+  // Daily spending gift (dailyevents.js)
+  rl_w_dailycost: ({ db, params: p }) => {
+    const acc = accountBySession(db, p);
+    const pl = acc && db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(acc.uid, Number(p.ServerID || 1));
+    if (!pl) return '<root code="3"><message>session expired</message></root>';
+    const de = require('./dailyevents');
+    if (Number(p.Cmd) === 2) { const r = de.costClaim(db, pl, Number(p.Award)); return r.error ? `<root code="5"><message>${r.error}</message></root>` : r.code ? `<root code="${r.code}"></root>` : '<root code="0">' + r.xml + '</root>'; }
+    const x = de.costXml(db, pl);
+    return x ? '<root code="0">' + x + '</root>' : '<root code="5"><message>the event is over</message></root>';
+  },
+  // Scrolling news of the border war tip (ui_borderWarTip.lua): <marquee> holds the messages; the top banner already shows our news.
+  rl_r_marquee: () => '<root code="0"><marquee></marquee></root>',
+  // Great gift for total recharge (totalgift.js)
+  rl_r_pay_cumula: ({ db, params: p }) => {
+    const acc = accountBySession(db, p);
+    const pl = acc && db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(acc.uid, Number(p.ServerID || 1));
+    if (!pl) return '<root code="3"><message>session expired</message></root>';
+    const x = require('./totalgift').listXml(db, pl);
+    return x ? '<root code="0">' + x + '</root>' : '<root code="5"><message>the event is over</message></root>';
+  },
   // Lottery (limited.js): Cmd 1 info, 2 my numbers, 3 winners
   rl_r_lottery: ({ db, params: p }) => {
     const acc = accountBySession(db, p);
@@ -461,6 +481,7 @@ module.exports = {
     const pl = acc && db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(acc.uid, Number(p.ServerID || 1));
     if (!pl) return '<root code="3"><message>session expired</message></root>';
     if (Number(p.Cmd) === 9002) return '<root code="0">' + sevenday.stateXml(db, pl) + '</root>';
+    if (Number(p.Cmd) === 9003) { const x = require('./dailyevents').streakXml(db, pl); return x ? '<root code="0">' + x + '</root>' : '<root code="5"><message>the event is over</message></root>'; }
     if (Number(p.Cmd) === 9004) { const x = limited.discountXml(db, pl); return x ? '<root code="0">' + x + '</root>' : '<root code="5"><message>the event is over</message></root>'; }
     return '<root code="0">' + game.actXml(db, pl) + '</root>';
   },
@@ -468,6 +489,8 @@ module.exports = {
     const acc = accountBySession(db, p);
     const pl = acc && db.prepare('SELECT * FROM players WHERE uid=? AND server_id=?').get(acc.uid, Number(p.ServerID || 1));
     if (!pl) return '<root code="3"><message>session expired</message></root>';
+    if (Number(p.ActType) === 9) { const r = require('./dailyevents').streakClaim(db, pl, Number(p.ActID)); return r.error ? `<root code="5"><message>${r.error}</message></root>` : r.code ? `<root code="${r.code}"></root>` : '<root code="0">' + r.xml + '</root>'; }
+    if (Number(p.ActType) === 6) { const r = require('./totalgift').claim(db, pl, Number(p.SubID)); return r.error ? `<root code="5"><message>${r.error}</message></root>` : '<root code="0">' + r.xml + '</root>'; }
     if (Number(p.ActType) === 10) { const r = limited.discountClaim(db, pl); return r.error ? `<root code="5"><message>${r.error}</message></root>` : '<root code="0">' + r.xml + '</root>'; }
     if (Number(p.ActType) === 7) {
       const s = sevenday.claim(db, pl, Number(p.ActID));
@@ -594,7 +617,7 @@ module.exports = {
     if (acc && t) {
       db.prepare('UPDATE players SET gold=gold+? WHERE uid=? AND server_id=?').run(t.gold + t.give, acc.uid, Number(p.ServerID || 1));
       vip.addExp(db, acc.uid, Number(p.ServerID || 1), t.rmb / 10); // cents / 10 = dollars x 10
-      limited.logTopup(db, acc.uid, Number(p.ServerID || 1), t.gold + t.give);
+      limited.logTopup(db, acc.uid, Number(p.ServerID || 1), t.gold + t.give, t.rmb);
     }
     return '<root code="1"></root>';
   },
@@ -607,7 +630,7 @@ module.exports = {
     db.prepare('UPDATE players SET gold=gold+? WHERE uid=? AND server_id=?').run(t.gold + t.give, pl.uid, pl.server_id);
     game.bumpTask(db, pl.uid, pl.server_id, 13); // daily task: recharge
     vip.addExp(db, pl.uid, pl.server_id, t.rmb / 10); // cents / 10 = dollars x 10
-    limited.logTopup(db, pl.uid, pl.server_id, t.gold + t.give);
+    limited.logTopup(db, pl.uid, pl.server_id, t.gold + t.give, t.rmb);
     // <viplevel>: the hot-updated top-up screen (28.0.9) sets the new level right away
     return '<root code="0">' + game.awardFull({ cash: t.gold + t.give }) + el('viplevel', vip.level(db, pl.uid, pl.server_id)) + '</root>';
   },

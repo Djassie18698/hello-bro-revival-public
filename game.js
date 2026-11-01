@@ -326,7 +326,7 @@ function mergeAwards(list) {
   const coin = sum('coin');
   return `<award dropid="${list.length ? (list[0].match(/dropid="(\d+)"/) || [0, 1])[1] : 1}" coin="${coin}"><cardlist>${pick(/<cardlist>(.*?)<\/cardlist>/)}</cardlist>` +
     `<proplist>${pick(/<proplist>(.*?)<\/proplist>/)}</proplist><chipbag>${pick(/<chipbag>(.*?)<\/chipbag>/)}</chipbag>${el('coin', coin)}${el('cash', sum('cash'))}` +
-    '<exp>0</exp><chip>0</chip><action>0</action><merit>0</merit><pk_action>0</pk_action><soul>0</soul></award>';
+    '<exp>0</exp><chip>0</chip><action>0</action><merit>0</merit><pk_action>0</pk_action>' + el('soul', sum('soul')) + '</award>';
 }
 // Cmd 1900 (one pull): <recruit .../> attributes + <award>. Cmd 1901 (ten pulls): <recruit_list> of exactly 10 <item><award>.
 function pullXml(res, count, type = 0) {

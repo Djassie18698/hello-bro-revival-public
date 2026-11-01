@@ -83,3 +83,10 @@ Grain and nostrum are sold in the mystery shop (5 or 10 at a time).
 - **Growth Fund (2 Nov 2026):** 500 gold, VIP3, 2500 back at Lv50 150 / 70 150 / 90 200 (original); Lv110 200, 130 250, 150 250, 170 300, 190 300, 210 350, 230 350 **(ours)**.
 - **Save time (2 Nov 2026):** one Big Ramen = ceil(200 / stage energy) fights of the furthest story stage, rounded down to hundreds (fits the original photo exactly); VIP1 and level 80 (original); 2 chances a day per VIP level **(ours)**, then 10 gold (original).
 - **Enemy strength (ours, 1 Nov 2026):** enemy team defence 285 at stage 1-2 (from the owner's video of the original) growing evenly to 2 500 000 at the last story stage; Battles use the same range over their 175 rounds; Ninja Test guards = stage value (1160 / 1950 / 2980 / 10 065 at stages 1 / 2 / 4 / 14, from photos) x min(1, (level/280)^2) (fits 5 photos; 2 Nov 2026), bosses +30% (ours).
+
+## Recharge events (added 2 Nov 2026)
+- Great gift for total recharge (`totalgift.js`): tiers, rewards and 48 h are ORIGINAL (photo 1238). (ours): which cards match the photo's faces (The Fourth Sage ATK, Hokage Kakashi (God), Kaguya (God)); the amount counted is the dollars of the top-up packages bought while it runs.
+- Time limited GiftPack (`limited.js` DISCOUNT): $19 / $60 / 70 h and the four rewards are ORIGINAL (photo 2755). (ours): Gold Key as "the key", the golden Choji EXP card, the pack icons.
+- Daily spending gift (`dailyevents.js`): all tiers and rewards (ours): 100 / 500 / 1000 / 2000 gold a day.
+- Recharge streak (`dailyevents.js`): "$3 a day" is the screen's own text; the 7 daily gifts and the bonus (300 Reincarnation Pills + 200 Souls Dan) are (ours).
+

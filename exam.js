@@ -10,7 +10,7 @@ const el = (n, v) => `<${n}>${v}</${n}>`;
 const esc = (t) => String(t == null ? '' : t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const day = () => new Date().toISOString().slice(0, 10);
 const STAGES = 15, TRIES = 3, BUY_COST = 20;
-const BOX_COST = [0, 30, 80];
+const BOX_COST = [0, 160, 250]; // boss stage chests: first free, then 160 and 250 gold (Facebook photos 2302, 2446, 2617, 2954)
 // chest drops (single-item dropinfo rows): normal stage chest, then the three boss-stage chests
 const NORMAL_BOX = [42, 43, 1397, 1784, 1785];
 const BOSS_BOX = [[270, 506], [1397, 114], [1398, 241, 1446]];
