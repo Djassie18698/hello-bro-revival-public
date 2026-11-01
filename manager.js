@@ -24,7 +24,7 @@ function addresses(port) {
 }
 
 function backups() {
-  const dir = path.join(process.cwd(), 'backups');
+  const dir = path.join(process.cwd(), process.env.HB_BACKUPS || 'backups');
   try {
     return fs.readdirSync(dir).filter((f) => f.endsWith('.db')).map((f) => ({ name: f, size: fs.statSync(path.join(dir, f)).size, at: fs.statSync(path.join(dir, f)).mtimeMs }))
       .sort((a, b) => b.at - a.at);
@@ -88,7 +88,7 @@ module.exports = async function manager(req, res, u, db, readBody) {
     return json(res, { ok: true, text });
   }
   if (u.pathname === '/manager/api/backup') {
-    const dir = path.join(process.cwd(), 'backups');
+    const dir = path.join(process.cwd(), process.env.HB_BACKUPS || 'backups');
     fs.mkdirSync(dir, { recursive: true });
     const name = 'manual-' + new Date().toISOString().replace(/[:.]/g, '-') + '.db';
     db.exec(`VACUUM INTO '${path.join(dir, name).replace(/'/g, "''")}'`);

@@ -8,17 +8,19 @@ const fs = require('fs');
 const path = require('path');
 const { DatabaseSync } = require('node:sqlite');
 
+// HB_BACKUPS: the backup folder (START-PUBLIC-SERVER.bat keeps the public save's backups apart)
+const BACKUPS = process.env.HB_BACKUPS || 'backups';
 const BACKUP_EVERY = 6 * 3600 * 1000, KEEP_AUTO = 10;
 let health = 'not checked', lastBackup = null;
 
 function backup(db, why) {
   try {
-    fs.mkdirSync('backups', { recursive: true });
+    fs.mkdirSync(BACKUPS, { recursive: true });
     const name = `hellobro-${why}-${new Date().toISOString().replace(/[:.]/g, '-')}.db`;
-    db.exec(`VACUUM INTO '${path.join('backups', name).replace(/'/g, "''")}'`);
+    db.exec(`VACUUM INTO '${path.join(BACKUPS, name).replace(/'/g, "''")}'`);
     lastBackup = { name, at: Date.now() };
-    const auto = fs.readdirSync('backups').filter((f) => /^hellobro-.*\.db$/.test(f)).sort();
-    for (const f of auto.slice(0, -KEEP_AUTO)) fs.rmSync(path.join('backups', f), { force: true });
+    const auto = fs.readdirSync(BACKUPS).filter((f) => /^hellobro-.*\.db$/.test(f)).sort();
+    for (const f of auto.slice(0, -KEEP_AUTO)) fs.rmSync(path.join(BACKUPS, f), { force: true });
   } catch (e) { console.error('backup failed', e.message); }
 }
 

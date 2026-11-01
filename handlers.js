@@ -52,6 +52,9 @@ function accountBySession(db, p, isLogin = false) {
   const uid = Number(p.Uin || p.Uid);
   if (!uid) return null;
   let acc = db.prepare('SELECT * FROM accounts WHERE uid=?').get(uid);
+  // LOGIN_LOCK=1 (gumplogin.js): only sessions handed out by the account login count, for every request including rl_w_login2
+  const lock = require('./gumplogin').locked();
+  if (lock && (!acc || !p.Session || p.Session !== acc.session)) return null;
   if (!acc) {
     db.prepare('INSERT INTO accounts(uid,username,password,session) VALUES(?,?,?,?)').run(uid, 'guest' + uid, '', p.Session || '');
     acc = db.prepare('SELECT * FROM accounts WHERE uid=?').get(uid);
@@ -248,8 +251,9 @@ module.exports = {
 
   // Enter a game server. hasreg=0 sends the client to character creation.
   rl_w_login2: ({ db, params: p }) => {
+    if (process.env.HB_DEBUG) console.log('[login2]', JSON.stringify(p));
     const acc = accountBySession(db, p, true);
-    if (!acc) return '<root code="3"><message>session expired</message></root>';
+    if (!acc) return require('./gumplogin').locked() ? '<root code="5"><message>Please log in again, or get the newest game file from the server owner.</message></root>' : '<root code="3"><message>session expired</message></root>';
     require('./settings').hornPending.add(String(acc.uid)); // the top banner goes out once per login (see rl_r_mainpage)
     const pl = db.prepare('SELECT 1 FROM players WHERE uid=? AND server_id=?').get(acc.uid, Number(p.ServerID || 1));
     return (
